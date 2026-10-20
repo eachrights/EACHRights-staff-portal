@@ -1,0 +1,23 @@
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageStaffUsersInThisPoolOnly",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:ListUsers",
+        "cognito-idp:ListUsersInGroup",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminUpdateUserAttributes",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminListGroupsForUser"
+      ],
+      "Resource": "arn:aws:cognito-idp:eu-north-1:202064055897:userpool/eu-north-1_OgXHqPCxJ"
+    }
+  ]
+}
