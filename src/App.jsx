@@ -12,6 +12,9 @@ import Login from "./pages/admin/Login";
 // Staff
 import Dashboard from "./pages/Dashboard";
 
+// Landing page after sign-in (M&E dashboard or files)
+import Home from "./pages/Home";
+
 // Admin pages
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import StaffUsers from "./pages/admin/StaffUsers";
@@ -27,7 +30,9 @@ import MEFrameworks from "./pages/admin/me-dashboard/Frameworks";
 import MEIndicators from "./pages/admin/me-dashboard/Indicators";
 import MELibrary from "./pages/admin/me-dashboard/Library";
 import MEForms from "./pages/admin/me-dashboard/Forms";
+import FormLibrary from "./pages/admin/me-dashboard/FormLibrary";
 import MEData from "./pages/admin/me-dashboard/Data";
+import DataTables from "./pages/admin/me-dashboard/DataTables";
 import MEInsights from "./pages/admin/me-dashboard/Insights";
 import MEReports from "./pages/admin/me-dashboard/Reports";
 import MEPredictions from "./pages/admin/me-dashboard/Predictions";
@@ -68,6 +73,19 @@ function App() {
         />
 
         {/* =====================================================
+            HOME (first page after sign-in)
+            Lets people start in the M&E dashboard or in the files.
+        ====================================================== */}
+        <Route
+          path="/home"
+          element={
+            <ProtectedRoute>
+              <PageShell>{() => <Home />}</PageShell>
+            </ProtectedRoute>
+          }
+        />
+
+        {/* =====================================================
             M&E (staff and administrator)
             Any signed-in user can open these. What they can see and
             report on is limited by the results Lambda, using their
@@ -87,8 +105,16 @@ function App() {
           <Route path="frameworks" element={<MEFrameworks />} />
           <Route path="indicators" element={<MEIndicators />} />
           <Route path="library" element={<MELibrary />} />
+
+          {/* Forms: fill in a reporting period, and the library to build,
+              copy, template and share forms */}
           <Route path="forms" element={<MEForms />} />
+          <Route path="form-library" element={<FormLibrary />} />
+
+          {/* Data: indicator data, and tables for importing and linking data */}
           <Route path="data" element={<MEData />} />
+          <Route path="data-tables" element={<DataTables />} />
+
           <Route path="insights" element={<MEInsights />} />
           <Route path="reports" element={<MEReports />} />
           <Route path="predictions" element={<MEPredictions />} />

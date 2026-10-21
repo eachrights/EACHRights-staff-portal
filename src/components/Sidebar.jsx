@@ -15,11 +15,14 @@ import {
   Gauge,
   Library,
   ClipboardList,
+  FileStack,
   Table2,
+  Database,
   Sparkles,
   FileBarChart,
   TrendingUp,
   BookOpen,
+  Home,
 } from "lucide-react";
 
 import {
@@ -54,7 +57,9 @@ const ME_GROUPS = [
       { name: "Indicators", href: "/me-dashboard/indicators", icon: Gauge },
       { name: "Indicator library", href: "/me-dashboard/library", icon: Library },
       { name: "Forms", href: "/me-dashboard/forms", icon: ClipboardList },
+      { name: "Form library", href: "/me-dashboard/form-library", icon: FileStack },
       { name: "Data table", href: "/me-dashboard/data", icon: Table2 },
+      { name: "Data tables", href: "/me-dashboard/data-tables", icon: Database },
     ],
   },
   {
@@ -167,15 +172,20 @@ function Sidebar({ mobileOpen, onClose }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [mobileOpen, onClose]);
 
+  const onHome = pathname === "/home" || pathname === "/home/";
   const onAdminHome = pathname === "/admin" || pathname === "/admin/";
   const onPrograms = pathname.startsWith("/admin/programs");
   const onMe = pathname.startsWith("/me-dashboard");
 
-  // Dashboards is an exact match so it isn't lit up on every M&E sub-page
+  /*
+   * Exact match, or a real sub-path of the link. A plain startsWith would light
+   * up "Data table" on /me-dashboard/data-tables, and "Forms" on
+   * /me-dashboard/form-library. Dashboards only matches itself.
+   */
   const meActive = (href) =>
-    href === "/me-dashboard"
-      ? pathname === href || pathname === `${href}/`
-      : pathname.startsWith(href);
+    pathname === href ||
+    pathname === `${href}/` ||
+    (href !== "/me-dashboard" && pathname.startsWith(`${href}/`));
 
   return (
     <>
@@ -197,7 +207,7 @@ function Sidebar({ mobileOpen, onClose }) {
         {/* BRAND */}
         <div className="flex h-16 shrink-0 items-center justify-between px-5">
           <Link
-            to={isAdmin ? "/admin" : "/dashboard"}
+            to="/home"
             onClick={onClose}
             className={`flex items-center gap-3 rounded-xl ${FOCUS}`}
           >
@@ -234,6 +244,14 @@ function Sidebar({ mobileOpen, onClose }) {
           <p className="mb-2 px-3 text-xs font-medium text-[#98A2B3]">Main menu</p>
 
           <ul className="space-y-0.5">
+            {/* Home (the page shown after sign-in) */}
+            <li className="flex items-center">
+              <TreeLink to="/home" active={onHome} onClick={onClose}>
+                <Home size={18} className={onHome ? "text-[#00664E]" : "text-[#98A2B3]"} />
+                <span className="flex-1">Home</span>
+              </TreeLink>
+            </li>
+
             {/* M&E (monitoring and evaluation) */}
             <li>
               <button

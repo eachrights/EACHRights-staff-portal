@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { userPool } from "../../cognito";
 
+// Where everyone lands after signing in (the page that offers M&E or files)
+const AFTER_LOGIN_PATH = "/home";
+
 const INPUT_CLASS =
   "w-full rounded-xl border border-[#D0D9D5] bg-white py-3 pl-10 text-sm text-[#0B2B24] outline-none transition placeholder:text-[#98A2B3] focus:border-[#008060] focus:ring-4 focus:ring-[#008060]/15 disabled:bg-[#F3F6F5]";
 
@@ -147,7 +150,7 @@ function Login() {
     setNewPassword("");
     setConfirmPassword("");
 
-    window.location.replace("/dashboard");
+    window.location.replace(AFTER_LOGIN_PATH);
   };
 
   const handleLogin = (event) => {
@@ -281,7 +284,7 @@ function Login() {
           setNewPassword("");
           setConfirmPassword("");
 
-          window.location.replace("/dashboard");
+          window.location.replace(AFTER_LOGIN_PATH);
         },
 
         onFailure: (err) => {

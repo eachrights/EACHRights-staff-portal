@@ -24,18 +24,35 @@ function MEForms() {
     (r) => r.saved?.status !== "approved" && drafts[r.ind.id] && drafts[r.ind.id].actual !== ""
   );
 
+  /*
+   * Values are saved one at a time. If one fails, the values that already went
+   * through are cleared from the drafts and the data is reloaded, so a retry
+   * only sends what is still unsaved.
+   */
   const submitAll = () =>
     run(async () => {
       if (pending.length === 0) throw new Error("Enter at least one actual value first.");
-      for (const { ind, saved } of pending) {
-        const d = draftFor(ind, saved);
-        await api(`/me/frameworks/${selectedId}/values`, {
-          method: "PUT",
-          body: { indicatorId: ind.id, period, actual: d.actual, comment: d.comment },
+      const savedIds = [];
+      try {
+        for (const { ind, saved } of pending) {
+          const d = draftFor(ind, saved);
+          await api(`/me/frameworks/${selectedId}/values`, {
+            method: "PUT",
+            body: { indicatorId: ind.id, period, actual: d.actual, comment: d.comment },
+          });
+          savedIds.push(ind.id);
+        }
+        setDrafts({});
+      } catch (err) {
+        setDrafts((cur) => {
+          const next = { ...cur };
+          savedIds.forEach((id) => delete next[id]);
+          return next;
         });
+        throw err;
+      } finally {
+        if (savedIds.length > 0) await reload();
       }
-      setDrafts({});
-      await reload();
     });
 
   return (
