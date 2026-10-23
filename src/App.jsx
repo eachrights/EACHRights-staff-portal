@@ -27,7 +27,7 @@ import Settings from "./pages/admin/Settings";
 // Monitoring and evaluation
 import MEDashboard from "./pages/admin/MEDashboard";
 // Projects: the list (current to previous) and the dashboard of the project you open
-import MEProjects from "./pages/admin/me-dashboard/Projects";
+import MEProjects from "./pages/admin/me-dashboard/ProjectsPage";
 import MEFrameworks from "./pages/admin/me-dashboard/Frameworks";
 import MEIndicators from "./pages/admin/me-dashboard/Indicators";
 import MELibrary from "./pages/admin/me-dashboard/Library";
