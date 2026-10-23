@@ -5,7 +5,9 @@ import { BTN, BTN_LIGHT, CARD, CardHead, ErrorBar, FIELD, NoFramework, Page, Pag
 
 const AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "No area";
-const DEFAULT_LEVELS = ["Goal", "Outcome", "Output"];
+
+/* Levels follow the MEAL Framework (Chapter 3): impact, outcome, output */
+const DEFAULT_LEVELS = ["Impact", "Outcome", "Output"];
 
 const DANGER =
   "rounded-lg border border-[#FDA29B] bg-white px-3.5 py-2 text-sm font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] disabled:cursor-not-allowed disabled:opacity-60";
@@ -13,6 +15,8 @@ const SMALL =
   "rounded-md border border-[#D0D5DD] bg-white px-2.5 py-1 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-50";
 const SMALL_DANGER =
   "rounded-md border border-[#FDA29B] bg-white px-2.5 py-1 text-xs font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] disabled:cursor-not-allowed disabled:opacity-50";
+
+const fmtNum = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 
 function MEFrameworks() {
   const { isAdmin, frameworks, selectedId, setSelectedId, data, fw, ordered, busy, error, run, loadList, reload } = useMEData();
@@ -24,6 +28,7 @@ function MEFrameworks() {
   const [editingResult, setEditingResult] = useState(null);
   const [resultTitle, setResultTitle] = useState("");
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
+
   useEffect(() => {
     let mounted = true;
     getAccess().then((r) => mounted && setAccess(r)).catch(() => {});
@@ -116,6 +121,11 @@ function MEFrameworks() {
   };
 
   const countFor = (id) => data?.indicators.filter((i) => i.resultId === id).length ?? 0;
+
+  /* Indicators in framework order, each with the result it measures */
+  const indicatorRows = data
+    ? ordered.flatMap((r) => data.indicators.filter((i) => i.resultId === r.id).map((i) => ({ r, i })))
+    : [];
 
   return (
     <Page>
@@ -238,9 +248,9 @@ function MEFrameworks() {
               </section>
 
               <section className={`${CARD} p-5`} aria-label="Results">
-                <CardHead title="Results" subtitle="Each result can hold indicators. A result can only be deleted once nothing sits under it." />
+                <CardHead title="Results" subtitle="Impact, outcomes and outputs. Each result can hold indicators. A result can only be deleted once nothing sits under it." />
                 {ordered.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet. Add the goal first.</p>
+                  <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet. Add the impact first.</p>
                 ) : (
                   <ul className="space-y-1.5">
                     {ordered.map((r) => (
@@ -259,7 +269,7 @@ function MEFrameworks() {
                               onChange={(e) => setResultTitle(e.target.value)}
                             />
                           ) : (
-                            <p className="truncate text-sm font-medium text-[#101828]">{r.title}</p>
+                            <p className="text-sm font-medium leading-5 text-[#101828]">{r.title}</p>
                           )}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -295,6 +305,71 @@ function MEFrameworks() {
                       </li>
                     ))}
                   </ul>
+                )}
+              </section>
+
+              {/* Indicators and their targets */}
+              <section className={`${CARD} overflow-hidden`} aria-label="Indicators and targets">
+                <div className="p-5 pb-3">
+                  <CardHead
+                    title="Indicators and targets"
+                    subtitle="Where each indicator starts (baseline) and the target set for each reporting period. A blank target means it is still to be set."
+                  />
+                </div>
+                {indicatorRows.length === 0 ? (
+                  <p className="px-5 pb-8 text-center text-sm text-[#98A2B3]">No indicators yet.</p>
+                ) : (
+                  <div className="max-h-[60vh] overflow-auto">
+                    <table className="w-full min-w-[760px] text-left text-sm">
+                      <caption className="sr-only">Indicators with baselines and targets by period</caption>
+                      <thead>
+                        <tr className="text-xs font-medium text-[#667085]">
+                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3">Indicator</th>
+                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Baseline</th>
+                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Target by period</th>
+                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {indicatorRows.map(({ r, i }) => {
+                          const targets = i.targets || {};
+                          const total = Object.values(targets).reduce((sum, v) => sum + Number(v || 0), 0);
+                          const isPercent = i.unit === "%";
+                          const hasTargets = Object.keys(targets).length > 0;
+                          return (
+                            <tr key={i.id} className="border-t border-[#F2F4F7] align-top">
+                              <td className="px-5 py-3">
+                                <p className="max-w-md font-medium leading-5 text-[#101828]">{i.name}</p>
+                                <p className="mt-0.5 text-xs text-[#667085]">
+                                  {levels[r.level] ?? `Level ${r.level + 1}`}
+                                  {i.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{i.unit}</span> : null}
+                                </p>
+                              </td>
+                              <td className="px-3 py-3 text-right tabular-nums text-[#475467]">{fmtNum(i.baseline)}</td>
+                              <td className="px-3 py-3">
+                                {hasTargets ? (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {fw.periods
+                                      .filter((p) => targets[p] !== undefined)
+                                      .map((p) => (
+                                        <span key={p} className="rounded-full bg-[#EDE9FB] px-2.5 py-0.5 text-xs font-medium text-[#5B3FD0]">
+                                          {p}: {fmtNum(targets[p])}
+                                        </span>
+                                      ))}
+                                  </div>
+                                ) : (
+                                  <span className="rounded-full bg-[#FBF3D0] px-2.5 py-0.5 text-xs font-medium text-[#7A5C00]">To be set</span>
+                                )}
+                              </td>
+                              <td className="px-5 py-3 text-right font-semibold tabular-nums text-[#101828]">
+                                {hasTargets && !isPercent ? fmtNum(total) : "-"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </section>
 
