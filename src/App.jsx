@@ -26,6 +26,8 @@ import Settings from "./pages/admin/Settings";
 
 // Monitoring and evaluation
 import MEDashboard from "./pages/admin/MEDashboard";
+// Projects: the list (current to previous) and the dashboard of the project you open
+import MEProjects from "./pages/admin/me-dashboard/Projects";
 import MEFrameworks from "./pages/admin/me-dashboard/Frameworks";
 import MEIndicators from "./pages/admin/me-dashboard/Indicators";
 import MELibrary from "./pages/admin/me-dashboard/Library";
@@ -37,6 +39,8 @@ import MEInsights from "./pages/admin/me-dashboard/Insights";
 import MEReports from "./pages/admin/me-dashboard/Reports";
 import MEPredictions from "./pages/admin/me-dashboard/Predictions";
 import MEGuides from "./pages/admin/me-dashboard/Guides";
+// Approvals and the portfolio roll-up (administrator only). Adjust the path to where the file lives.
+import PortfolioView from "./pages/admin/PortfolioView";
 
 // Route protection
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -102,8 +106,15 @@ function App() {
           }
         >
           <Route index element={<MEDashboard />} />
+
+          {/* Projects: the list, and a project's dashboard (opened with ?project=<id>) */}
+          <Route path="projects" element={<MEProjects />} />
+
           <Route path="frameworks" element={<MEFrameworks />} />
+
+          {/* Indicators */}
           <Route path="indicators" element={<MEIndicators />} />
+
           <Route path="library" element={<MELibrary />} />
 
           {/* Forms: fill in a reporting period, and the library to build,
@@ -114,6 +125,16 @@ function App() {
           {/* Data: indicator data, and tables for importing and linking data */}
           <Route path="data" element={<MEData />} />
           <Route path="data-tables" element={<DataTables />} />
+
+          {/* Approvals and portfolio (administrator only, the API enforces it too) */}
+          <Route
+            path="portfolio"
+            element={
+              <ProtectedRoute requireAdmin>
+                <PortfolioView />
+              </ProtectedRoute>
+            }
+          />
 
           <Route path="insights" element={<MEInsights />} />
           <Route path="reports" element={<MEReports />} />

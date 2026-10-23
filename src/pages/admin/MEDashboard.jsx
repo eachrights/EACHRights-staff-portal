@@ -1,26 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAccess } from "../../access";
+import { Link } from "react-router-dom";
+import { DEPARTMENT_AREAS, PROGRAM_AREAS, getAccess } from "../../access";
 import { api, downloadCsv } from "../../meApi";
 import PortfolioView from "./PortfolioView";
 
-/* TolaData-style tokens: white cards on a quiet page, purple as the single brand colour,
-   green / amber / red kept for status only. */
-const INK = "#101828";
-const MUTED = "#667085";
-const SOFT = "#98A2B3";
-const LINE = "#E5E7EB";
+/* Design tokens. White surfaces on a quiet page, purple as the single brand colour,
+   green / amber / red reserved for status. */
 const PURPLE = "#5B3FD0";
-const PURPLE_MID = "#B7A8F2";
 const PURPLE_LIGHT = "#EDE9FB";
+const SOFT = "#98A2B3";
 
-const FIELD =
-  "rounded-lg border border-[#D0D5DD] bg-white px-3 py-2 text-sm text-[#101828] outline-none transition placeholder:text-[#98A2B3] focus:border-[#5B3FD0] focus:ring-4 focus:ring-[#5B3FD0]/15 disabled:bg-[#F4F5F7] disabled:text-[#667085]";
-const BTN =
-  "rounded-lg bg-[#5B3FD0] px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-[#4A31B8] disabled:opacity-60";
-const BTN_LIGHT =
-  "rounded-lg border border-[#D0D5DD] bg-white px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:opacity-60";
-const CARD = "rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]";
+const FOCUS =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B3FD0]";
+const FIELD = `rounded-lg border border-[#D0D5DD] bg-white px-3 py-2 text-sm text-[#101828] outline-none transition placeholder:text-[#98A2B3] focus:border-[#5B3FD0] focus:ring-4 focus:ring-[#5B3FD0]/15 disabled:cursor-not-allowed disabled:bg-[#F4F5F7] disabled:text-[#667085]`;
+const BTN = `rounded-lg bg-[#5B3FD0] px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-[#4A31B8] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const BTN_LIGHT = `rounded-lg border border-[#D0D5DD] bg-white px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const BTN_SM = `rounded-md bg-[#5B3FD0] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4A31B8] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const BTN_SM_LIGHT = `rounded-md border border-[#D0D5DD] bg-white px-3 py-1.5 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const CARD = "rounded-xl border border-[#E5E7EB] bg-white";
 const FONT = { fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif' };
+
+const ALL_AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 
 /* Progress against target, from approved values only */
 const PROGRESS = {
@@ -30,18 +30,20 @@ const PROGRESS = {
   none: { label: "No data", color: "#D9D9DF" },
 };
 
+/* Where a reported value is in the approval workflow */
 const REVIEW = {
   submitted: { label: "Awaiting approval", cls: "bg-[#FBF3D0] text-[#7A5C00]" },
   rejected: { label: "Rejected", cls: "bg-red-50 text-red-700" },
   approved: { label: "Approved", cls: "bg-[#E1F1EB] text-[#1F7A5C]" },
+  none: { label: "Not reported", cls: "bg-[#F2F4F7] text-[#667085]" },
 };
 
 /* Heatmap bands, light to dark purple */
 const HEAT = [
-  { min: 90, label: ">90% Very high", bg: PURPLE, fg: "#FFFFFF" },
-  { min: 70, label: "70-89% High", bg: "#9C87EA", fg: "#FFFFFF" },
-  { min: 50, label: "50-69% Medium", bg: "#D5CCF6", fg: "#2E1F7A" },
-  { min: 0, label: "<50% Low", bg: "#EDE9FB", fg: "#2E1F7A" },
+  { min: 90, label: "90% and above", bg: PURPLE, fg: "#FFFFFF" },
+  { min: 70, label: "70 to 89%", bg: "#9C87EA", fg: "#FFFFFF" },
+  { min: 50, label: "50 to 69%", bg: "#D5CCF6", fg: "#2E1F7A" },
+  { min: 0, label: "Below 50%", bg: "#EDE9FB", fg: "#2E1F7A" },
 ];
 const heatOf = (pct) => HEAT.find((h) => pct >= h.min) || HEAT[HEAT.length - 1];
 
@@ -63,6 +65,7 @@ const SAMPLE = {
 };
 
 const progressOf = (pct) => (pct === null ? "none" : pct >= 90 ? "on" : pct >= 50 ? "risk" : "off");
+const fmt = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 
 function orderResults(results) {
   const children = new Map();
@@ -85,27 +88,34 @@ function orderResults(results) {
   return ordered;
 }
 
-function CardHead({ title, subtitle }) {
+/* ---------- Building blocks ---------- */
+
+function SectionHead({ title, subtitle }) {
   return (
     <div className="mb-4">
-      <h2 className="text-sm font-semibold text-[#101828]">{title}</h2>
-      {subtitle && <p className="mt-0.5 text-xs text-[#667085]">{subtitle}</p>}
+      <h2 className="text-[15px] font-semibold leading-6 text-[#101828]">{title}</h2>
+      {subtitle && <p className="text-[13px] leading-5 text-[#667085]">{subtitle}</p>}
     </div>
   );
 }
 
-function Kpi({ label, value, note, tone, bar }) {
+/* The four headline numbers share one panel, separated by rules */
+function StatStrip({ stats }) {
   return (
-    <div className={`${CARD} p-4`}>
-      <p className="text-xs font-medium text-[#667085]">{label}</p>
-      <p className="mt-1.5 text-2xl font-semibold tracking-tight text-[#101828]">{value}</p>
-      {bar && (
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#EEF0F4]">
-          <div className="h-full rounded-full" style={{ width: `${Math.min(bar.pct, 100)}%`, backgroundColor: bar.color }} />
+    <dl className={`${CARD} grid divide-y divide-[#EEF0F4] sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x`}>
+      {stats.map((s) => (
+        <div key={s.label} className="p-5 sm:[&:nth-child(n+3)]:border-t sm:[&:nth-child(n+3)]:border-[#EEF0F4] xl:[&:nth-child(n+3)]:border-t-0">
+          <dt className="text-[13px] font-medium text-[#667085]">{s.label}</dt>
+          <dd className="mt-1 text-[28px] font-semibold leading-9 tracking-tight tabular-nums text-[#101828]">{s.value}</dd>
+          {s.bar && (
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+              <div className="h-full rounded-full" style={{ width: `${Math.min(s.bar.pct, 100)}%`, backgroundColor: s.bar.color }} />
+            </div>
+          )}
+          <p className={`mt-2 text-[13px] ${s.tone || "text-[#667085]"}`}>{s.note}</p>
         </div>
-      )}
-      <p className={`mt-1.5 text-xs ${tone || "text-[#667085]"}`}>{note}</p>
-    </div>
+      ))}
+    </dl>
   );
 }
 
@@ -119,7 +129,7 @@ function ViewTabs({ view, onChange }) {
           role="tab"
           aria-selected={view === id}
           onClick={() => onChange(id)}
-          className={`rounded-md px-3.5 py-1.5 text-sm font-medium transition ${
+          className={`rounded-md px-3.5 py-1.5 text-sm font-medium transition ${FOCUS} ${
             view === id ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
           }`}
         >
@@ -130,12 +140,24 @@ function ViewTabs({ view, onChange }) {
   );
 }
 
+function Skeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading dashboard" className="space-y-4">
+      <div className={`${CARD} h-28 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className={`${CARD} h-56 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+        <div className={`${CARD} h-56 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+      </div>
+    </div>
+  );
+}
+
 /* Line + soft area, average % of target per period (approved values only) */
 function TrendChart({ points }) {
   const W = 420, H = 190, L = 38, R = 12, T = 12, B = 26;
   const known = points.filter((p) => p.pct !== null);
   if (known.length === 0) {
-    return <p className="py-14 text-center text-sm text-[#98A2B3]">No approved values yet.</p>;
+    return <p className="py-14 text-center text-sm text-[#667085]">No approved values yet. Results appear here once values are approved.</p>;
   }
   const yMax = Math.max(100, Math.ceil(Math.max(...known.map((p) => p.pct)) / 25) * 25);
   const x = (i) => (points.length === 1 ? (L + W - R) / 2 : L + (i * (W - L - R)) / (points.length - 1));
@@ -157,7 +179,9 @@ function TrendChart({ points }) {
       <path d={area} fill={PURPLE_LIGHT} opacity="0.7" />
       <path d={line} fill="none" stroke={PURPLE} strokeWidth="2" strokeLinejoin="round" />
       {seq.map((p) => (
-        <circle key={p.period} cx={p.x} cy={p.y} r="3.5" fill="#fff" stroke={PURPLE} strokeWidth="2" />
+        <circle key={p.period} cx={p.x} cy={p.y} r="3.5" fill="#fff" stroke={PURPLE} strokeWidth="2">
+          <title>{`${p.period}: ${p.pct}%`}</title>
+        </circle>
       ))}
       {points.map((p, i) => (
         <text key={p.period} x={x(i)} y={H - 8} textAnchor="middle" fontSize="10" fill={SOFT}>{p.period}</text>
@@ -175,14 +199,18 @@ const STACK = [
 
 function StackedColumns({ groups }) {
   if (groups.length === 0) {
-    return <p className="py-14 text-center text-sm text-[#98A2B3]">No indicators with a target this period.</p>;
+    return <p className="py-14 text-center text-sm text-[#667085]">No indicators have a target this period.</p>;
   }
   const max = Math.max(...groups.map((g) => g.total));
   return (
     <>
       <div className="flex h-44 items-end justify-around gap-4 border-b border-[#EEF0F4] px-2">
         {groups.map((g) => (
-          <div key={g.name} className="flex h-full w-full max-w-[72px] flex-col justify-end" title={`${g.name}: ${g.total}`}>
+          <div
+            key={g.name}
+            className="flex h-full w-full max-w-[72px] flex-col justify-end"
+            title={`${g.name}: ${g.approved} approved, ${g.awaiting} awaiting approval, ${g.missing} not reported`}
+          >
             <div className="flex flex-col-reverse overflow-hidden rounded-t-md" style={{ height: `${(g.total / max) * 100}%` }}>
               {STACK.map((s) =>
                 g[s.key] > 0 ? <div key={s.key} style={{ height: `${(g[s.key] / g.total) * 100}%`, backgroundColor: s.color }} /> : null
@@ -210,6 +238,8 @@ function StackedColumns({ groups }) {
   );
 }
 
+/* ---------- Page ---------- */
+
 function MEDashboard() {
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
   const [frameworks, setFrameworks] = useState([]);
@@ -220,6 +250,7 @@ function MEDashboard() {
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [view, setView] = useState("project");
   const [strategic, setStrategic] = useState([]);
 
@@ -244,17 +275,26 @@ function MEDashboard() {
     setPeriod((cur) => (loaded.framework.periods.includes(cur) ? cur : loaded.framework.periods[0]));
   }, []);
 
-  const run = async (task) => {
+  /* `success` is the confirmation shown when the task finishes without an error */
+  const run = async (task, success) => {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       await task();
+      if (success) setNotice(success);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = setTimeout(() => setNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     run(() => loadList());
@@ -266,7 +306,15 @@ function MEDashboard() {
     run(() => loadFramework(selectedId));
   }, [selectedId, loadFramework]);
 
+  // Unsaved entries belong to one period, so they are dropped when the period changes
+  useEffect(() => {
+    setDrafts({});
+  }, [period]);
+
   const { isAdmin } = access;
+
+  /* The programmes this person belongs to (their "dept-<slug>" groups) */
+  const myProgrammes = ALL_AREAS.filter((a) => access.departments.has(a.slug));
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -274,6 +322,7 @@ function MEDashboard() {
       .then((result) => setStrategic(result.strategic))
       .catch(() => {});
   }, [isAdmin, view]);
+
   const fw = data?.framework;
   const canEnter = Boolean(fw) && (isAdmin || access.departments.has(fw.area));
   const ordered = useMemo(() => (data ? orderResults(data.results) : []), [data]);
@@ -302,7 +351,7 @@ function MEDashboard() {
     return rows.filter((row) => ids.has(row.result.id));
   }, [rows, ordered, resultFilter]);
 
-  const expected = rows.filter((r) => r.target !== undefined);
+  const expected = useMemo(() => rows.filter((r) => r.target !== undefined), [rows]);
   const counts = Object.fromEntries(Object.keys(PROGRESS).map((k) => [k, expected.filter((r) => r.progress === k).length]));
   const reported = expected.filter((r) => r.saved && r.saved.status !== "rejected").length;
   const awaiting = rows.filter((r) => r.saved?.status === "submitted").length;
@@ -367,7 +416,7 @@ function MEDashboard() {
         return rest;
       });
       await loadFramework(selectedId);
-    });
+    }, "Value submitted for approval.");
 
   const reviewValue = (ind, approve) =>
     run(async () => {
@@ -376,7 +425,7 @@ function MEDashboard() {
         body: { indicatorId: ind.id, period, approve },
       });
       await loadFramework(selectedId);
-    });
+    }, approve ? "Value approved." : "Value rejected.");
 
   const linkIndicator = (ind, strategicId) =>
     run(async () => {
@@ -385,7 +434,7 @@ function MEDashboard() {
         body: { strategicId },
       });
       await loadFramework(selectedId);
-    });
+    }, "Strategic link updated.");
 
   const exportFile = (format) =>
     run(() =>
@@ -407,7 +456,7 @@ function MEDashboard() {
         await post("indicators", { ...indicator, resultId: ids[on] });
       }
       await loadList(id);
-    });
+    }, "Sample framework loaded.");
 
   if (view === "portfolio") {
     return (
@@ -418,17 +467,53 @@ function MEDashboard() {
     );
   }
 
+  const stats = fw
+    ? [
+        { label: "Indicators", value: fmt(data.indicators.length), note: `Across ${data.results.length} ${data.results.length === 1 ? "result" : "results"}` },
+        {
+          label: "Reported this period",
+          value: `${reported} of ${expected.length}`,
+          note: "Indicators with a target",
+          bar: { pct: reportedPct, color: PURPLE },
+        },
+        {
+          label: "On track",
+          value: fmt(counts.on),
+          note: "At 90% of target or more",
+          tone: "text-[#1F7A5C]",
+          bar: { pct: onTrackPct, color: PROGRESS.on.color },
+        },
+        {
+          label: "Awaiting approval",
+          value: fmt(awaiting),
+          note: isAdmin ? (awaiting ? "Ready for your review" : "Nothing to review") : "With the administrator",
+          tone: awaiting ? "text-[#7A5C00]" : undefined,
+        },
+      ]
+    : [];
+
   return (
-    <div className="space-y-5" style={FONT}>
+    <div className="space-y-6" style={FONT}>
       {isAdmin && <ViewTabs view={view} onChange={setView} />}
 
       {/* Header */}
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#101828]">M&amp;E Dashboard</h1>
-          <p className="mt-1 text-sm text-[#667085]">
-            {fw ? `${fw.donor || "No donor set"} · ${period}` : "Progress against indicator targets."}
-          </p>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">M&amp;E dashboard</h1>
+          {fw ? (
+            <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+              <div className="flex gap-1.5">
+                <dt className="text-[#667085]">Donor</dt>
+                <dd className="font-medium text-[#344054]">{fw.donor || "Not set"}</dd>
+              </div>
+              <div className="flex gap-1.5">
+                <dt className="text-[#667085]">Reporting period</dt>
+                <dd className="font-medium text-[#344054]">{period}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="mt-1 text-sm text-[#667085]">Progress against indicator targets.</p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -440,40 +525,80 @@ function MEDashboard() {
             </select>
           )}
           {fw && (
-            <>
-              <button type="button" onClick={() => exportFile("results")} disabled={busy} className={BTN_LIGHT}>
-                Results table
+            <div role="group" aria-label="Export" className="inline-flex overflow-hidden rounded-lg border border-[#D0D5DD] bg-white">
+              <button
+                type="button"
+                onClick={() => exportFile("results")}
+                disabled={busy}
+                className={`border-r border-[#D0D5DD] px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
+              >
+                Export results table
               </button>
-              <button type="button" onClick={() => exportFile("logframe")} disabled={busy} className={BTN_LIGHT}>
-                Logframe
+              <button
+                type="button"
+                onClick={() => exportFile("logframe")}
+                disabled={busy}
+                className={`px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
+              >
+                Export logframe
               </button>
-            </>
+            </div>
           )}
-          {isAdmin && (
-            <button type="button" onClick={loadSample} disabled={busy} className={BTN_LIGHT}>
-              Load sample
+          {isAdmin && frameworks.length === 0 && (
+            <button type="button" onClick={loadSample} disabled={busy} className={BTN}>
+              Load sample framework
             </button>
+          )}
+          {!isAdmin && myProgrammes.length > 0 && (
+            <Link to="/me-dashboard/frameworks" className={BTN_LIGHT}>
+              Manage frameworks
+            </Link>
           )}
         </div>
       </header>
 
-      {error && (
-        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <div aria-live="polite" className="space-y-2 empty:hidden">
+        {error && (
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        {notice && (
+          <div role="status" className="rounded-lg border border-[#BFE3D3] bg-[#EEF8F3] px-4 py-2.5 text-sm text-[#1F7A5C]">
+            {notice}
+          </div>
+        )}
+      </div>
+
+      {!fw && busy && <Skeleton />}
 
       {!fw && !busy && (
-        <div className={`${CARD} p-10 text-center text-sm text-[#667085]`}>
-          {isAdmin
-            ? "No frameworks yet. Load the sample to see how this works, then edit it."
-            : "There are no frameworks for your department yet."}
+        <div className={`${CARD} px-6 py-14 text-center`}>
+          <h2 className="text-[15px] font-semibold text-[#101828]">
+            {isAdmin
+              ? "No frameworks yet"
+              : myProgrammes.length > 0
+                ? "No frameworks in your programmes yet"
+                : "You are not assigned to a programme yet"}
+          </h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-[#667085]">
+            {isAdmin
+              ? "Load the sample framework to see how results and indicators fit together, then edit it to match your project."
+              : myProgrammes.length > 0
+                ? `Create the first framework for ${myProgrammes.map((a) => a.name).join(", ")}, then add results and indicators and start reporting.`
+                : "Ask the administrator to add you to a programme. You will then see its frameworks here and can report on them."}
+          </p>
+          {!isAdmin && myProgrammes.length > 0 && (
+            <Link to="/me-dashboard/frameworks" className={`${BTN} mt-5 inline-block`}>
+              Create a framework
+            </Link>
+          )}
         </div>
       )}
 
       {fw && (
         <>
-          {/* Period */}
+          {/* Reporting period */}
           <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Reporting period">
             {fw.periods.map((p) => (
               <button
@@ -482,7 +607,7 @@ function MEDashboard() {
                 role="tab"
                 aria-selected={p === period}
                 onClick={() => setPeriod(p)}
-                className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition ${
+                className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition ${FOCUS} ${
                   p === period ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
                 }`}
               >
@@ -491,34 +616,14 @@ function MEDashboard() {
             ))}
           </div>
 
-          {/* Summary */}
-          <section aria-label="Summary" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="Indicators" value={data.indicators.length} note={`${data.results.length} results in framework`} />
-            <Kpi
-              label="Reported this period"
-              value={`${reported}/${expected.length}`}
-              note="Indicators with a target"
-              bar={{ pct: reportedPct, color: PURPLE }}
-            />
-            <Kpi
-              label="On track"
-              value={counts.on}
-              note="90% of target or more"
-              tone="text-[#1F7A5C]"
-              bar={{ pct: onTrackPct, color: PROGRESS.on.color }}
-            />
-            <Kpi
-              label="Awaiting approval"
-              value={awaiting}
-              note={isAdmin ? "Needs your review" : "With the administrator"}
-              tone={awaiting ? "text-[#7A5C00]" : undefined}
-            />
+          <section aria-label="Summary">
+            <StatStrip stats={stats} />
           </section>
 
           {/* Charts */}
-          <div className="grid gap-4 lg:grid-cols-2">
-            <section aria-label="Progress overview" className={`${CARD} p-5`}>
-              <CardHead title="Progress against target" subtitle={`Approved values only, ${period}`} />
+          <div className="grid gap-5 lg:grid-cols-2">
+            <section aria-label="Progress overview" className={`${CARD} p-6`}>
+              <SectionHead title="Progress against target" subtitle={`Approved values only, ${period}`} />
               <div
                 className="flex h-3 gap-0.5 overflow-hidden rounded-full bg-[#EEF0F4]"
                 role="img"
@@ -531,46 +636,46 @@ function MEDashboard() {
                     ) : null
                   )}
               </div>
-              <ul className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <ul className="mt-5 grid grid-cols-2 gap-x-8 gap-y-2.5 text-sm">
                 {Object.entries(PROGRESS).map(([k, v]) => (
                   <li key={k} className="flex items-center gap-2 text-[#475467]">
                     <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[3px]" style={{ backgroundColor: v.color }} />
                     {v.label}
-                    <span className="ml-auto font-semibold text-[#101828]">{counts[k]}</span>
+                    <span className="ml-auto font-semibold tabular-nums text-[#101828]">{counts[k]}</span>
                   </li>
                 ))}
               </ul>
             </section>
 
-            <section aria-label="Achievement by period" className={`${CARD} p-5`}>
-              <CardHead title="Achievement by period" subtitle="Average % of target, approved values" />
+            <section aria-label="Achievement by period" className={`${CARD} p-6`}>
+              <SectionHead title="Achievement by period" subtitle="Average percentage of target, approved values" />
               <TrendChart points={trend} />
             </section>
 
-            <section aria-label="Reporting status" className={`${CARD} p-5`}>
-              <CardHead title="Reporting status by level" subtitle={`Indicators with a target, ${period}`} />
+            <section aria-label="Reporting status" className={`${CARD} p-6`}>
+              <SectionHead title="Reporting status by level" subtitle={`Indicators with a target, ${period}`} />
               <StackedColumns groups={levelGroups} />
             </section>
 
-            <section aria-label="Result heatmap" className={`${CARD} p-5`}>
-              <CardHead title="Result coverage" subtitle={`Average % of target per result, ${period}`} />
+            <section aria-label="Result heatmap" className={`${CARD} p-6`}>
+              <SectionHead title="Result coverage" subtitle={`Average percentage of target per result, ${period}`} />
               {tiles.length === 0 ? (
-                <p className="py-14 text-center text-sm text-[#98A2B3]">No results with targets this period.</p>
+                <p className="py-14 text-center text-sm text-[#667085]">No results have a target this period.</p>
               ) : (
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                   {tiles.map(({ result, pct }) => {
-                    const heat = pct === null ? { bg: "#F2F4F7", fg: SOFT } : heatOf(pct);
+                    const heat = pct === null ? { bg: "#F2F4F7", fg: "#667085" } : heatOf(pct);
                     return (
                       <button
                         key={result.id}
                         type="button"
                         onClick={() => setResultFilter(result.id)}
                         title={result.title}
-                        className="flex min-h-[64px] flex-col justify-between rounded-md p-2 text-left transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B3FD0]"
+                        className={`flex min-h-[68px] flex-col justify-between rounded-md p-2.5 text-left transition hover:opacity-90 ${FOCUS}`}
                         style={{ backgroundColor: heat.bg, color: heat.fg }}
                       >
                         <span className="line-clamp-2 text-[11px] font-medium leading-tight">{result.title}</span>
-                        <span className="text-xs font-semibold">{pct === null ? "No data" : `${pct}%`}</span>
+                        <span className="text-xs font-semibold tabular-nums">{pct === null ? "No data" : `${pct}%`}</span>
                       </button>
                     );
                   })}
@@ -588,9 +693,9 @@ function MEDashboard() {
           </div>
 
           {/* Framework tree + indicators */}
-          <div className="grid gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+          <div className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
             <nav aria-label="Results framework" className={`${CARD} h-fit p-3`}>
-              <p className="px-2 pb-2 text-xs font-medium text-[#98A2B3]">Results framework</p>
+              <p className="px-2 pb-2 text-[13px] font-medium text-[#667085]">Results framework</p>
               <ul className="space-y-0.5">
                 {[{ id: "", title: "All results", depth: 0, level: -1 }, ...ordered].map((r) => {
                   const active = resultFilter === r.id;
@@ -601,7 +706,7 @@ function MEDashboard() {
                         onClick={() => setResultFilter(r.id)}
                         aria-current={active ? "true" : undefined}
                         style={{ paddingLeft: `${10 + r.depth * 14}px` }}
-                        className={`w-full rounded-lg py-2 pr-2 text-left text-[13px] transition ${
+                        className={`w-full rounded-lg py-2 pr-2 text-left text-[13px] transition ${FOCUS} ${
                           active ? "bg-[#EDE9FB] font-semibold text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
                         }`}
                       >
@@ -618,128 +723,155 @@ function MEDashboard() {
               </ul>
             </nav>
 
-            <section aria-label="Indicators" className={`${CARD} overflow-x-auto`}>
-              <div className="px-5 pt-5">
-                <CardHead title="Indicator results" subtitle={`Latest values for ${period}`} />
+            <section aria-label="Indicators" className={`${CARD} overflow-hidden`}>
+              <div className="px-6 pt-6">
+                <SectionHead title="Indicator results" subtitle={`Targets, reported values and approval status for ${period}`} />
               </div>
-              <table className="w-full min-w-[860px] text-left text-sm">
-                <thead>
-                  <tr className="border-y border-[#E5E7EB] bg-[#F9FAFB] text-xs font-medium text-[#667085]">
-                    <th className="px-5 py-3">Indicator</th>
-                    <th className="px-3 py-3">Baseline</th>
-                    <th className="px-3 py-3">Target</th>
-                    <th className="px-3 py-3">Actual</th>
-                    <th className="px-3 py-3">Progress</th>
-                    <th className="px-5 py-3" />
-                  </tr>
-                </thead>
 
-                <tbody>
-                  {shownRows.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-5 py-10 text-center text-sm text-[#98A2B3]">
-                        No indicators here yet.
-                      </td>
+              {!canEnter && (
+                <p className="mx-6 mb-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-2 text-[13px] text-[#667085]">
+                  You can view these results. Only the administrator and the owning programme can report values.
+                </p>
+              )}
+
+              <div className="max-h-[70vh] overflow-auto">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <caption className="sr-only">Indicator results for {period}</caption>
+                  <thead>
+                    <tr className="text-xs font-medium text-[#667085]">
+                      {[
+                        ["Indicator", "px-6 text-left"],
+                        ["Baseline", "px-3 text-right"],
+                        ["Target", "px-3 text-right"],
+                        ["Reported value", "px-3 text-left"],
+                        ["Progress", "px-3 text-left"],
+                        ["Status", "px-3 text-left"],
+                      ].map(([label, cls]) => (
+                        <th
+                          key={label}
+                          scope="col"
+                          className={`sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] py-3 ${cls}`}
+                        >
+                          {label}
+                        </th>
+                      ))}
+                      <th scope="col" className="sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3 text-right">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  )}
+                  </thead>
 
-                  {shownRows.map(({ ind, result, saved, target, pct, progress }) => {
-                    const draft = draftFor(ind, saved);
-                    const locked = saved?.status === "approved";
-                    const review = REVIEW[saved?.status];
-
-                    return (
-                      <tr key={ind.id} className="border-t border-[#F2F4F7] align-top">
-                        <td className="px-5 py-4">
-                          <p className="font-medium text-[#101828]">{ind.name}</p>
-                          <p className="mt-0.5 text-xs text-[#667085]">
-                            {result.title}{ind.unit ? ` · ${ind.unit}` : ""}
-                          </p>
-                          {isAdmin && strategic.length > 0 && (
-                            <select
-                              aria-label={`Strategic indicator for ${ind.name}`}
-                              value={ind.strategicId || ""}
-                              onChange={(e) => linkIndicator(ind, e.target.value)}
-                              disabled={busy}
-                              className={`${FIELD} mt-2 w-full max-w-xs py-1.5 text-xs`}
-                            >
-                              <option value="">Not linked to a strategic indicator</option>
-                              {strategic.map((s) => (
-                                <option key={s.id} value={s.id}>{s.name}</option>
-                              ))}
-                            </select>
-                          )}
-                        </td>
-
-                        <td className="px-3 py-4 text-[#475467]">{ind.baseline ?? "-"}</td>
-                        <td className="px-3 py-4 text-[#475467]">{target ?? "-"}</td>
-
-                        <td className="px-3 py-4">
-                          <div className="space-y-1.5">
-                            <input
-                              type="number"
-                              aria-label={`Actual for ${ind.name}`}
-                              value={draft.actual}
-                              onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
-                              disabled={!canEnter || locked || busy}
-                              className={`${FIELD} w-28`}
-                            />
-                            <input
-                              type="text"
-                              placeholder="Comment"
-                              aria-label={`Comment for ${ind.name}`}
-                              value={draft.comment}
-                              onChange={(e) => setDraft(ind, saved, { comment: e.target.value })}
-                              disabled={!canEnter || locked || busy}
-                              className={`${FIELD} w-44`}
-                            />
-                          </div>
-                        </td>
-
-                        <td className="px-3 py-4">
-                          <div className="w-36">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="flex items-center gap-1.5 font-medium text-[#344054]">
-                                <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: PROGRESS[progress].color }} />
-                                {PROGRESS[progress].label}
-                              </span>
-                              {pct !== null && <span className="text-[#667085]">{pct}%</span>}
-                            </div>
-                            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EEF0F4]">
-                              <div className="h-full rounded-full" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[progress].color }} />
-                            </div>
-                          </div>
-                          {review && !locked && (
-                            <span className={`mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${review.cls}`}>
-                              {review.label}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="flex justify-end gap-2">
-                            {canEnter && !locked && (
-                              <button type="button" onClick={() => submitValue(ind, saved)} disabled={busy} className={BTN}>
-                                Submit
-                              </button>
-                            )}
-                            {isAdmin && saved?.status === "submitted" && (
-                              <>
-                                <button type="button" onClick={() => reviewValue(ind, true)} disabled={busy} className={BTN}>
-                                  Approve
-                                </button>
-                                <button type="button" onClick={() => reviewValue(ind, false)} disabled={busy} className={BTN_LIGHT}>
-                                  Reject
-                                </button>
-                              </>
-                            )}
-                          </div>
+                  <tbody>
+                    {shownRows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-12 text-center text-sm text-[#667085]">
+                          No indicators under this result yet.
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    )}
+
+                    {shownRows.map(({ ind, result, saved, target, pct, progress }) => {
+                      const draft = draftFor(ind, saved);
+                      const locked = saved?.status === "approved";
+                      const review = REVIEW[saved?.status] ?? REVIEW.none;
+
+                      return (
+                        <tr key={ind.id} className="border-t border-[#F2F4F7] align-top transition hover:bg-[#FAFAFC]">
+                          <td className="px-6 py-4">
+                            <p className="max-w-sm font-medium leading-5 text-[#101828]">{ind.name}</p>
+                            <p className="mt-0.5 text-xs text-[#667085]">
+                              {result.title}
+                              {ind.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{ind.unit}</span> : null}
+                            </p>
+                            {isAdmin && strategic.length > 0 && (
+                              <select
+                                aria-label={`Strategic indicator for ${ind.name}`}
+                                value={ind.strategicId || ""}
+                                onChange={(e) => linkIndicator(ind, e.target.value)}
+                                disabled={busy}
+                                className={`${FIELD} mt-2 w-full max-w-xs py-1.5 text-xs`}
+                              >
+                                <option value="">Not linked to a strategic indicator</option>
+                                {strategic.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-4 text-right tabular-nums text-[#475467]">{fmt(ind.baseline)}</td>
+                          <td className="px-3 py-4 text-right font-medium tabular-nums text-[#101828]">{fmt(target)}</td>
+
+                          <td className="px-3 py-4">
+                            <div className="space-y-1.5">
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="Value"
+                                aria-label={`Actual for ${ind.name}`}
+                                value={draft.actual}
+                                onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
+                                disabled={!canEnter || locked || busy}
+                                className={`${FIELD} w-28 tabular-nums`}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Add a comment"
+                                aria-label={`Comment for ${ind.name}`}
+                                value={draft.comment}
+                                onChange={(e) => setDraft(ind, saved, { comment: e.target.value })}
+                                disabled={!canEnter || locked || busy}
+                                className={`${FIELD} w-48`}
+                              />
+                            </div>
+                          </td>
+
+                          <td className="px-3 py-4">
+                            <div className="w-36">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="flex items-center gap-1.5 font-medium text-[#344054]">
+                                  <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: PROGRESS[progress].color }} />
+                                  {PROGRESS[progress].label}
+                                </span>
+                                {pct !== null && <span className="tabular-nums text-[#667085]">{pct}%</span>}
+                              </div>
+                              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[progress].color }} />
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-3 py-4">
+                            <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${review.cls}`}>
+                              {review.label}
+                            </span>
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <div className="flex justify-end gap-2">
+                              {canEnter && !locked && (
+                                <button type="button" onClick={() => submitValue(ind, saved)} disabled={busy} className={BTN_SM}>
+                                  Submit
+                                </button>
+                              )}
+                              {isAdmin && saved?.status === "submitted" && (
+                                <>
+                                  <button type="button" onClick={() => reviewValue(ind, true)} disabled={busy} className={BTN_SM}>
+                                    Approve
+                                  </button>
+                                  <button type="button" onClick={() => reviewValue(ind, false)} disabled={busy} className={BTN_SM_LIGHT}>
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </div>
         </>

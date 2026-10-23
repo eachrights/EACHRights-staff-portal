@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   Folder,
+  FolderOpen,
   ChevronDown,
   Users,
   Upload,
@@ -15,6 +16,7 @@ import {
   Gauge,
   Library,
   ClipboardList,
+  ClipboardCheck,
   FileStack,
   Table2,
   Database,
@@ -47,11 +49,13 @@ const ADMIN_LINKS = [
 /*
  * M&E features, grouped like the TolaData menu. Each href needs a <Route>
  * in App.jsx (see the /me-dashboard group).
+ * Items marked adminOnly are hidden from staff (the API also refuses them).
  */
 const ME_GROUPS = [
   {
     label: "Workspace",
     items: [
+      { name: "Projects", href: "/me-dashboard/projects", icon: FolderOpen },
       { name: "Dashboards", href: "/me-dashboard", icon: LayoutDashboard },
       { name: "Frameworks", href: "/me-dashboard/frameworks", icon: FolderKanban },
       { name: "Indicators", href: "/me-dashboard/indicators", icon: Gauge },
@@ -60,6 +64,12 @@ const ME_GROUPS = [
       { name: "Form library", href: "/me-dashboard/form-library", icon: FileStack },
       { name: "Data table", href: "/me-dashboard/data", icon: Table2 },
       { name: "Data tables", href: "/me-dashboard/data-tables", icon: Database },
+      {
+        name: "Approvals & portfolio",
+        href: "/me-dashboard/portfolio",
+        icon: ClipboardCheck,
+        adminOnly: true,
+      },
     ],
   },
   {
@@ -281,33 +291,35 @@ function Sidebar({ mobileOpen, onClose }) {
                       </p>
 
                       <ul className="space-y-0.5">
-                        {group.items.map((item) => {
-                          const Icon = item.icon;
-                          const active = meActive(item.href);
+                        {group.items
+                          .filter((item) => !item.adminOnly || isAdmin)
+                          .map((item) => {
+                            const Icon = item.icon;
+                            const active = meActive(item.href);
 
-                          return (
-                            <li key={item.href} className="flex">
-                              <TreeLink
-                                small
-                                tone="purple"
-                                to={item.href}
-                                active={active}
-                                onClick={onClose}
-                              >
-                                <Icon
-                                  size={16}
-                                  className={active ? "text-[#5B3FD0]" : "text-[#98A2B3]"}
-                                />
-                                <span className="flex-1 truncate">{item.name}</span>
-                                {item.badge && (
-                                  <span className="rounded-full bg-[#EDE9FB] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B3FD0]">
-                                    {item.badge}
-                                  </span>
-                                )}
-                              </TreeLink>
-                            </li>
-                          );
-                        })}
+                            return (
+                              <li key={item.href} className="flex">
+                                <TreeLink
+                                  small
+                                  tone="purple"
+                                  to={item.href}
+                                  active={active}
+                                  onClick={onClose}
+                                >
+                                  <Icon
+                                    size={16}
+                                    className={active ? "text-[#5B3FD0]" : "text-[#98A2B3]"}
+                                  />
+                                  <span className="flex-1 truncate">{item.name}</span>
+                                  {item.badge && (
+                                    <span className="rounded-full bg-[#EDE9FB] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B3FD0]">
+                                      {item.badge}
+                                    </span>
+                                  )}
+                                </TreeLink>
+                              </li>
+                            );
+                          })}
                       </ul>
                     </div>
                   ))}
