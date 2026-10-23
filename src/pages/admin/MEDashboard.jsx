@@ -17,17 +17,17 @@ const BTN = `rounded-lg bg-[#5B3FD0] px-3.5 py-2 text-sm font-semibold text-whit
 const BTN_LIGHT = `rounded-lg border border-[#D0D5DD] bg-white px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
 const BTN_SM = `rounded-md bg-[#5B3FD0] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4A31B8] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
 const BTN_SM_LIGHT = `rounded-md border border-[#D0D5DD] bg-white px-3 py-1.5 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
-const CARD = "rounded-xl border border-[#E5E7EB] bg-white";
+const CARD = "rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]";
 const FONT = { fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif' };
 
 const ALL_AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 
 /* Progress against target, from approved values only */
 const PROGRESS = {
-  on: { label: "On track", color: "#1F7A5C" },
-  risk: { label: "At risk", color: "#D4A600" },
-  off: { label: "Off track", color: "#B42318" },
-  none: { label: "No data", color: "#D9D9DF" },
+  on: { label: "On track", hint: "90% of target or more", color: "#1F7A5C" },
+  risk: { label: "At risk", hint: "50 to 89% of target", color: "#D4A600" },
+  off: { label: "Off track", hint: "Below 50% of target", color: "#B42318" },
+  none: { label: "Not yet approved", hint: "No approved value", color: "#D9D9DF" },
 };
 
 /* Where a reported value is in the approval workflow */
@@ -37,15 +37,6 @@ const REVIEW = {
   approved: { label: "Approved", cls: "bg-[#E1F1EB] text-[#1F7A5C]" },
   none: { label: "Not reported", cls: "bg-[#F2F4F7] text-[#667085]" },
 };
-
-/* Heatmap bands, light to dark purple */
-const HEAT = [
-  { min: 90, label: "90% and above", bg: PURPLE, fg: "#FFFFFF" },
-  { min: 70, label: "70 to 89%", bg: "#9C87EA", fg: "#FFFFFF" },
-  { min: 50, label: "50 to 69%", bg: "#D5CCF6", fg: "#2E1F7A" },
-  { min: 0, label: "Below 50%", bg: "#EDE9FB", fg: "#2E1F7A" },
-];
-const heatOf = (pct) => HEAT.find((h) => pct >= h.min) || HEAT[HEAT.length - 1];
 
 /* Placeholder content so there is something to edit later */
 const SAMPLE = {
@@ -90,38 +81,21 @@ function orderResults(results) {
 
 /* ---------- Building blocks ---------- */
 
-function SectionHead({ title, subtitle }) {
+function SectionHead({ title, subtitle, aside }) {
   return (
-    <div className="mb-4">
-      <h2 className="text-[15px] font-semibold leading-6 text-[#101828]">{title}</h2>
-      {subtitle && <p className="text-[13px] leading-5 text-[#667085]">{subtitle}</p>}
+    <div className="mb-5 flex items-start justify-between gap-3">
+      <div>
+        <h2 className="text-base font-semibold leading-6 text-[#101828]">{title}</h2>
+        {subtitle && <p className="text-[13px] leading-5 text-[#667085]">{subtitle}</p>}
+      </div>
+      {aside}
     </div>
-  );
-}
-
-/* The four headline numbers share one panel, separated by rules */
-function StatStrip({ stats }) {
-  return (
-    <dl className={`${CARD} grid divide-y divide-[#EEF0F4] sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x`}>
-      {stats.map((s) => (
-        <div key={s.label} className="p-5 sm:[&:nth-child(n+3)]:border-t sm:[&:nth-child(n+3)]:border-[#EEF0F4] xl:[&:nth-child(n+3)]:border-t-0">
-          <dt className="text-[13px] font-medium text-[#667085]">{s.label}</dt>
-          <dd className="mt-1 text-[28px] font-semibold leading-9 tracking-tight tabular-nums text-[#101828]">{s.value}</dd>
-          {s.bar && (
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
-              <div className="h-full rounded-full" style={{ width: `${Math.min(s.bar.pct, 100)}%`, backgroundColor: s.bar.color }} />
-            </div>
-          )}
-          <p className={`mt-2 text-[13px] ${s.tone || "text-[#667085]"}`}>{s.note}</p>
-        </div>
-      ))}
-    </dl>
   );
 }
 
 function ViewTabs({ view, onChange }) {
   return (
-    <div role="tablist" aria-label="View" className="inline-flex rounded-lg border border-[#E5E7EB] bg-white p-1">
+    <div role="tablist" aria-label="View" className="inline-flex rounded-xl border border-[#E5E7EB] bg-white p-1">
       {[["project", "Project view"], ["portfolio", "Portfolio view"]].map(([id, label]) => (
         <button
           key={id}
@@ -129,7 +103,7 @@ function ViewTabs({ view, onChange }) {
           role="tab"
           aria-selected={view === id}
           onClick={() => onChange(id)}
-          className={`rounded-md px-3.5 py-1.5 text-sm font-medium transition ${FOCUS} ${
+          className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${FOCUS} ${
             view === id ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
           }`}
         >
@@ -142,24 +116,92 @@ function ViewTabs({ view, onChange }) {
 
 function Skeleton() {
   return (
-    <div aria-busy="true" aria-label="Loading dashboard" className="space-y-4">
-      <div className={`${CARD} h-28 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className={`${CARD} h-56 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
-        <div className={`${CARD} h-56 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+    <div aria-busy="true" aria-label="Loading dashboard" className="space-y-5">
+      <div className={`${CARD} h-48 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <div className={`${CARD} h-64 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
+        <div className={`${CARD} h-64 animate-pulse bg-[#F9FAFB] motion-reduce:animate-none`} />
       </div>
     </div>
   );
 }
 
-/* Line + soft area, average % of target per period (approved values only) */
+/* Small number tile used beside the donut */
+function StatTile({ label, value, note, tone, bar }) {
+  return (
+    <div className={`${CARD} p-5`}>
+      <p className="text-[13px] font-medium text-[#667085]">{label}</p>
+      <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums text-[#101828]">{value}</p>
+      {bar && (
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+          <div className="h-full rounded-full" style={{ width: `${Math.min(bar.pct, 100)}%`, backgroundColor: bar.color }} />
+        </div>
+      )}
+      <p className={`mt-2 text-[13px] leading-5 ${tone || "text-[#667085]"}`}>{note}</p>
+    </div>
+  );
+}
+
+/* Donut: how many indicators are on track, at risk, off track or waiting for data */
+function Donut({ segments, total, centerValue, centerLabel }) {
+  const size = 170;
+  const r = 66;
+  const stroke = 20;
+  const c = 2 * Math.PI * r;
+  let offset = 0;
+
+  return (
+    <div className="relative h-[170px] w-[170px] shrink-0">
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        className="h-full w-full -rotate-90"
+        role="img"
+        aria-label={segments.map((s) => `${s.label}: ${s.count}`).join(", ")}
+      >
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#EEF0F4" strokeWidth={stroke} />
+        {total > 0 &&
+          segments.map((s) => {
+            if (s.count === 0) return null;
+            const dash = (s.count / total) * c;
+            const el = (
+              <circle
+                key={s.key}
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={stroke}
+                strokeDasharray={`${Math.max(dash - 2, 0)} ${c - Math.max(dash - 2, 0)}`}
+                strokeDashoffset={-offset}
+              >
+                <title>{`${s.label}: ${s.count}`}</title>
+              </circle>
+            );
+            offset += dash;
+            return el;
+          })}
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className="text-3xl font-semibold tracking-tight tabular-nums text-[#101828]">{centerValue}</span>
+        <span className="mt-0.5 max-w-[90px] text-[11px] leading-tight text-[#667085]">{centerLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+/* Line + soft area, average % of target per period, with a dashed line at 100% (the target) */
 function TrendChart({ points }) {
-  const W = 420, H = 190, L = 38, R = 12, T = 12, B = 26;
+  const W = 460, H = 220, L = 40, R = 14, T = 14, B = 28;
   const known = points.filter((p) => p.pct !== null);
   if (known.length === 0) {
-    return <p className="py-14 text-center text-sm text-[#667085]">No approved values yet. Results appear here once values are approved.</p>;
+    return (
+      <p className="py-16 text-center text-sm text-[#667085]">
+        No approved values yet. The trend appears here once values are approved.
+      </p>
+    );
   }
-  const yMax = Math.max(100, Math.ceil(Math.max(...known.map((p) => p.pct)) / 25) * 25);
+  const yMax = Math.max(125, Math.ceil(Math.max(...known.map((p) => p.pct)) / 25) * 25);
   const x = (i) => (points.length === 1 ? (L + W - R) / 2 : L + (i * (W - L - R)) / (points.length - 1));
   const y = (v) => T + (1 - v / yMax) * (H - T - B);
   const pts = points.map((p, i) => (p.pct === null ? null : { x: x(i), y: y(p.pct), ...p }));
@@ -176,12 +218,17 @@ function TrendChart({ points }) {
           <text x={L - 6} y={y(t) + 3} textAnchor="end" fontSize="10" fill={SOFT}>{t}%</text>
         </g>
       ))}
+      <line x1={L} x2={W - R} y1={y(100)} y2={y(100)} stroke="#1F7A5C" strokeWidth="1.5" strokeDasharray="5 4" />
+      <text x={W - R} y={y(100) - 5} textAnchor="end" fontSize="10" fill="#1F7A5C">Target (100%)</text>
       <path d={area} fill={PURPLE_LIGHT} opacity="0.7" />
-      <path d={line} fill="none" stroke={PURPLE} strokeWidth="2" strokeLinejoin="round" />
+      <path d={line} fill="none" stroke={PURPLE} strokeWidth="2.5" strokeLinejoin="round" />
       {seq.map((p) => (
-        <circle key={p.period} cx={p.x} cy={p.y} r="3.5" fill="#fff" stroke={PURPLE} strokeWidth="2">
-          <title>{`${p.period}: ${p.pct}%`}</title>
-        </circle>
+        <g key={p.period}>
+          <circle cx={p.x} cy={p.y} r="4" fill="#fff" stroke={PURPLE} strokeWidth="2.5">
+            <title>{`${p.period}: ${p.pct}%`}</title>
+          </circle>
+          <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize="11" fontWeight="600" fill="#344054">{p.pct}%</text>
+        </g>
       ))}
       {points.map((p, i) => (
         <text key={p.period} x={x(i)} y={H - 8} textAnchor="middle" fontSize="10" fill={SOFT}>{p.period}</text>
@@ -190,28 +237,69 @@ function TrendChart({ points }) {
   );
 }
 
+/* Horizontal bars: one per result, average % of target. Click a bar to filter the table. */
+function ResultBars({ tiles, activeId, onPick }) {
+  if (tiles.length === 0) {
+    return <p className="py-16 text-center text-sm text-[#667085]">No results have a target this period.</p>;
+  }
+  return (
+    <ul className="space-y-3.5">
+      {tiles.map(({ result, pct, progress }) => {
+        const active = activeId === result.id;
+        return (
+          <li key={result.id}>
+            <button
+              type="button"
+              onClick={() => onPick(active ? "" : result.id)}
+              aria-pressed={active}
+              title={result.title}
+              className={`block w-full rounded-lg px-2 py-1.5 text-left transition hover:bg-[#F9FAFB] ${FOCUS} ${active ? "bg-[#F5F2FD]" : ""}`}
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-[13px] font-medium text-[#344054]" style={{ paddingLeft: `${result.depth * 10}px` }}>
+                  {result.title}
+                </span>
+                <span className="shrink-0 text-[13px] font-semibold tabular-nums text-[#101828]">
+                  {pct === null ? "No data" : `${pct}%`}
+                </span>
+              </div>
+              <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[progress].color }}
+                />
+              </div>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /* Stacked columns: how many indicators per level are approved, awaiting, or not reported */
 const STACK = [
   { key: "approved", label: "Approved", color: "#1F7A5C" },
   { key: "awaiting", label: "Awaiting approval", color: "#D4A600" },
-  { key: "missing", label: "Not reported", color: "#DDDDE0" },
+  { key: "missing", label: "Not reported", color: "#D9D9DF" },
 ];
 
 function StackedColumns({ groups }) {
   if (groups.length === 0) {
-    return <p className="py-14 text-center text-sm text-[#667085]">No indicators have a target this period.</p>;
+    return <p className="py-16 text-center text-sm text-[#667085]">No indicators have a target this period.</p>;
   }
   const max = Math.max(...groups.map((g) => g.total));
   return (
     <>
-      <div className="flex h-44 items-end justify-around gap-4 border-b border-[#EEF0F4] px-2">
+      <div className="flex h-48 items-end justify-around gap-4 border-b border-[#EEF0F4] px-2">
         {groups.map((g) => (
           <div
             key={g.name}
-            className="flex h-full w-full max-w-[72px] flex-col justify-end"
+            className="flex h-full w-full max-w-[80px] flex-col justify-end"
             title={`${g.name}: ${g.approved} approved, ${g.awaiting} awaiting approval, ${g.missing} not reported`}
           >
-            <div className="flex flex-col-reverse overflow-hidden rounded-t-md" style={{ height: `${(g.total / max) * 100}%` }}>
+            <p className="mb-1 text-center text-xs font-semibold tabular-nums text-[#344054]">{g.total}</p>
+            <div className="flex flex-col-reverse overflow-hidden rounded-t-md" style={{ height: `${(g.total / max) * 85}%` }}>
               {STACK.map((s) =>
                 g[s.key] > 0 ? <div key={s.key} style={{ height: `${(g[s.key] / g.total) * 100}%`, backgroundColor: s.color }} /> : null
               )}
@@ -221,7 +309,7 @@ function StackedColumns({ groups }) {
       </div>
       <div className="mt-2 flex justify-around gap-4 px-2">
         {groups.map((g) => (
-          <p key={g.name} className="w-full max-w-[72px] truncate text-center text-xs text-[#667085]" title={g.name}>
+          <p key={g.name} className="w-full max-w-[80px] truncate text-center text-xs text-[#667085]" title={g.name}>
             {g.name}
           </p>
         ))}
@@ -229,7 +317,7 @@ function StackedColumns({ groups }) {
       <ul className="mt-4 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-[#475467]">
         {STACK.map((s) => (
           <li key={s.key} className="flex items-center gap-1.5">
-            <span aria-hidden="true" className="h-2 w-2 rounded-[3px]" style={{ backgroundColor: s.color }} />
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[3px]" style={{ backgroundColor: s.color }} />
             {s.label}
           </li>
         ))}
@@ -237,6 +325,16 @@ function StackedColumns({ groups }) {
     </>
   );
 }
+
+/* Order of importance for the "needs attention" list */
+const ATTENTION_ORDER = { review: 0, rejected: 1, off: 2, risk: 3, missing: 4 };
+const ATTENTION_STYLE = {
+  review: "bg-[#FBF3D0] text-[#7A5C00]",
+  rejected: "bg-red-50 text-red-700",
+  off: "bg-red-50 text-red-700",
+  risk: "bg-[#FBF3D0] text-[#7A5C00]",
+  missing: "bg-[#F2F4F7] text-[#475467]",
+};
 
 /* ---------- Page ---------- */
 
@@ -247,6 +345,7 @@ function MEDashboard() {
   const [data, setData] = useState(null);
   const [period, setPeriod] = useState("");
   const [resultFilter, setResultFilter] = useState("");
+  const [rowFilter, setRowFilter] = useState("all");
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -303,6 +402,7 @@ function MEDashboard() {
   useEffect(() => {
     setDrafts({});
     setResultFilter("");
+    setRowFilter("all");
     run(() => loadFramework(selectedId));
   }, [selectedId, loadFramework]);
 
@@ -344,7 +444,7 @@ function MEDashboard() {
   }, [data, ordered, period]);
 
   /* Selecting a result also shows everything beneath it */
-  const shownRows = useMemo(() => {
+  const resultRows = useMemo(() => {
     if (!resultFilter) return rows;
     const ids = new Set([resultFilter]);
     for (const r of ordered) if (ids.has(r.parentId)) ids.add(r.id);
@@ -355,6 +455,18 @@ function MEDashboard() {
   const counts = Object.fromEntries(Object.keys(PROGRESS).map((k) => [k, expected.filter((r) => r.progress === k).length]));
   const reported = expected.filter((r) => r.saved && r.saved.status !== "rejected").length;
   const awaiting = rows.filter((r) => r.saved?.status === "submitted").length;
+
+  /* Table filters */
+  const filterTests = {
+    all: () => true,
+    todo: (r) => r.target !== undefined && (!r.saved || r.saved.status === "rejected"),
+    review: (r) => r.saved?.status === "submitted",
+    behind: (r) => r.progress === "off" || r.progress === "risk",
+  };
+  const filterCounts = Object.fromEntries(
+    Object.entries(filterTests).map(([k, test]) => [k, resultRows.filter(test).length])
+  );
+  const shownRows = resultRows.filter(filterTests[rowFilter]);
 
   /* Average % of target per period, approved values only */
   const trend = useMemo(() => {
@@ -383,7 +495,7 @@ function MEDashboard() {
       .filter((g) => g.total > 0);
   }, [fw, expected]);
 
-  /* Heatmap tiles: average % of target per result, selected period */
+  /* One bar per result: average % of target, selected period */
   const tiles = useMemo(() => {
     return ordered
       .map((result) => {
@@ -391,12 +503,26 @@ function MEDashboard() {
         if (own.length === 0) return null;
         const known = own.filter((r) => r.pct !== null);
         const pct = known.length ? Math.round(known.reduce((a, r) => a + r.pct, 0) / known.length) : null;
-        return { result, pct };
+        return { result, pct, progress: progressOf(pct) };
       })
       .filter(Boolean);
   }, [ordered, rows]);
 
-  const onTrackPct = expected.length ? Math.round((counts.on / expected.length) * 100) : 0;
+  /* Plain-language to-do list, most important first */
+  const attention = useMemo(() => {
+    const list = [];
+    for (const row of expected) {
+      if (isAdmin && row.saved?.status === "submitted") list.push({ row, tone: "review", text: "A value is waiting for your approval" });
+      else if (row.saved?.status === "rejected") list.push({ row, tone: "rejected", text: "Value was rejected, enter a new one" });
+      else if (row.progress === "off") list.push({ row, tone: "off", text: `Off track, at ${row.pct}% of target` });
+      else if (row.progress === "risk") list.push({ row, tone: "risk", text: `At risk, at ${row.pct}% of target` });
+      else if (!row.saved) list.push({ row, tone: "missing", text: "No value reported yet" });
+    }
+    return list.sort((a, b) => ATTENTION_ORDER[a.tone] - ATTENTION_ORDER[b.tone]);
+  }, [expected, isAdmin]);
+
+  const knownPcts = expected.filter((r) => r.pct !== null).map((r) => r.pct);
+  const overallPct = knownPcts.length ? Math.round(knownPcts.reduce((a, b) => a + b, 0) / knownPcts.length) : null;
   const reportedPct = expected.length ? Math.round((reported / expected.length) * 100) : 0;
 
   const draftFor = (ind, saved) => drafts[ind.id] ?? { actual: saved?.actual ?? "", comment: saved?.comment ?? "" };
@@ -458,6 +584,13 @@ function MEDashboard() {
       await loadList(id);
     }, "Sample framework loaded.");
 
+  /* Jump from the to-do list to the matching row in the table */
+  const goToIndicator = (row) => {
+    setResultFilter(row.result.id);
+    setRowFilter("all");
+    setTimeout(() => document.getElementById("indicator-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+
   if (view === "portfolio") {
     return (
       <div className="space-y-6" style={FONT}>
@@ -467,30 +600,25 @@ function MEDashboard() {
     );
   }
 
-  const stats = fw
-    ? [
-        { label: "Indicators", value: fmt(data.indicators.length), note: `Across ${data.results.length} ${data.results.length === 1 ? "result" : "results"}` },
-        {
-          label: "Reported this period",
-          value: `${reported} of ${expected.length}`,
-          note: "Indicators with a target",
-          bar: { pct: reportedPct, color: PURPLE },
-        },
-        {
-          label: "On track",
-          value: fmt(counts.on),
-          note: "At 90% of target or more",
-          tone: "text-[#1F7A5C]",
-          bar: { pct: onTrackPct, color: PROGRESS.on.color },
-        },
-        {
-          label: "Awaiting approval",
-          value: fmt(awaiting),
-          note: isAdmin ? (awaiting ? "Ready for your review" : "Nothing to review") : "With the administrator",
-          tone: awaiting ? "text-[#7A5C00]" : undefined,
-        },
-      ]
-    : [];
+  const donutSegments = Object.entries(PROGRESS).map(([key, v]) => ({ key, label: v.label, color: v.color, count: counts[key] }));
+
+  const overallSentence =
+    expected.length === 0
+      ? "No indicators have a target in this period."
+      : overallPct === null
+        ? "No values have been approved yet for this period."
+        : overallPct >= 90
+          ? "Results are on track against targets."
+          : overallPct >= 50
+            ? "Results are partly meeting targets. Some need attention."
+            : "Results are well below target. Action is needed.";
+
+  const FILTERS = [
+    ["all", "All"],
+    ["todo", "Still to report"],
+    ...(isAdmin ? [["review", "To approve"]] : []),
+    ["behind", "Behind target"],
+  ];
 
   return (
     <div className="space-y-6" style={FONT}>
@@ -501,18 +629,12 @@ function MEDashboard() {
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">M&amp;E dashboard</h1>
           {fw ? (
-            <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
-              <div className="flex gap-1.5">
-                <dt className="text-[#667085]">Donor</dt>
-                <dd className="font-medium text-[#344054]">{fw.donor || "Not set"}</dd>
-              </div>
-              <div className="flex gap-1.5">
-                <dt className="text-[#667085]">Reporting period</dt>
-                <dd className="font-medium text-[#344054]">{period}</dd>
-              </div>
-            </dl>
+            <p className="mt-1 text-sm text-[#667085]">
+              {fw.donor ? <>Donor: <span className="font-medium text-[#344054]">{fw.donor}</span> · </> : null}
+              Showing <span className="font-medium text-[#344054]">{period}</span>
+            </p>
           ) : (
-            <p className="mt-1 text-sm text-[#667085]">Progress against indicator targets.</p>
+            <p className="mt-1 text-sm text-[#667085]">See how results are progressing against targets.</p>
           )}
         </div>
 
@@ -525,24 +647,14 @@ function MEDashboard() {
             </select>
           )}
           {fw && (
-            <div role="group" aria-label="Export" className="inline-flex overflow-hidden rounded-lg border border-[#D0D5DD] bg-white">
-              <button
-                type="button"
-                onClick={() => exportFile("results")}
-                disabled={busy}
-                className={`border-r border-[#D0D5DD] px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
-              >
-                Export results table
+            <>
+              <button type="button" onClick={() => exportFile("results")} disabled={busy} className={BTN_LIGHT}>
+                Download results (CSV)
               </button>
-              <button
-                type="button"
-                onClick={() => exportFile("logframe")}
-                disabled={busy}
-                className={`px-3.5 py-2 text-sm font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
-              >
-                Export logframe
+              <button type="button" onClick={() => exportFile("logframe")} disabled={busy} className={BTN_LIGHT}>
+                Download logframe (CSV)
               </button>
-            </div>
+            </>
           )}
           {isAdmin && frameworks.length === 0 && (
             <button type="button" onClick={loadSample} disabled={busy} className={BTN}>
@@ -574,7 +686,7 @@ function MEDashboard() {
 
       {!fw && !busy && (
         <div className={`${CARD} px-6 py-14 text-center`}>
-          <h2 className="text-[15px] font-semibold text-[#101828]">
+          <h2 className="text-base font-semibold text-[#101828]">
             {isAdmin
               ? "No frameworks yet"
               : myProgrammes.length > 0
@@ -599,281 +711,310 @@ function MEDashboard() {
       {fw && (
         <>
           {/* Reporting period */}
-          <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Reporting period">
-            {fw.periods.map((p) => (
-              <button
-                key={p}
-                type="button"
-                role="tab"
-                aria-selected={p === period}
-                onClick={() => setPeriod(p)}
-                className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition ${FOCUS} ${
-                  p === period ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-medium text-[#667085]">Reporting period</span>
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Reporting period">
+              {fw.periods.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="tab"
+                  aria-selected={p === period}
+                  onClick={() => setPeriod(p)}
+                  className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition ${FOCUS} ${
+                    p === period ? "bg-[#5B3FD0] text-white" : "bg-white text-[#475467] ring-1 ring-inset ring-[#E5E7EB] hover:bg-[#F4F5F7]"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <section aria-label="Summary">
-            <StatStrip stats={stats} />
+          {/* 1. The headline: how are we doing overall? */}
+          <section aria-label="Overall summary" className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+            <div className={`${CARD} p-6`}>
+              <SectionHead title="How are we doing?" subtitle={overallSentence} />
+              <div className="flex flex-wrap items-center gap-8">
+                <Donut
+                  segments={donutSegments}
+                  total={expected.length}
+                  centerValue={overallPct === null ? "-" : `${overallPct}%`}
+                  centerLabel="average of target reached"
+                />
+                <ul className="min-w-[220px] flex-1 space-y-3">
+                  {Object.entries(PROGRESS).map(([k, v]) => (
+                    <li key={k} className="flex items-center gap-3">
+                      <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-[4px]" style={{ backgroundColor: v.color }} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium text-[#101828]">{v.label}</span>
+                        <span className="block text-xs text-[#667085]">{v.hint}</span>
+                      </span>
+                      <span className="text-lg font-semibold tabular-nums text-[#101828]">{counts[k]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-3 xl:grid-cols-1">
+              <StatTile
+                label="Reported so far"
+                value={`${reported} of ${expected.length}`}
+                note="Indicators with a value entered"
+                bar={{ pct: reportedPct, color: PURPLE }}
+              />
+              <StatTile
+                label="Awaiting approval"
+                value={fmt(awaiting)}
+                note={isAdmin ? (awaiting ? "Ready for your review" : "Nothing to review") : "With the administrator"}
+                tone={awaiting ? "text-[#7A5C00]" : undefined}
+              />
+              <StatTile
+                label="Indicators in this project"
+                value={fmt(data.indicators.length)}
+                note={`Across ${data.results.length} ${data.results.length === 1 ? "result" : "results"}`}
+              />
+            </div>
           </section>
 
-          {/* Charts */}
+          {/* 2. What should I do next? + trend */}
           <div className="grid gap-5 lg:grid-cols-2">
-            <section aria-label="Progress overview" className={`${CARD} p-6`}>
-              <SectionHead title="Progress against target" subtitle={`Approved values only, ${period}`} />
-              <div
-                className="flex h-3 gap-0.5 overflow-hidden rounded-full bg-[#EEF0F4]"
-                role="img"
-                aria-label={Object.entries(PROGRESS).map(([k, v]) => `${v.label}: ${counts[k]}`).join(", ")}
-              >
-                {expected.length > 0 &&
-                  Object.entries(PROGRESS).map(([k, v]) =>
-                    counts[k] > 0 ? (
-                      <div key={k} style={{ width: `${(counts[k] / expected.length) * 100}%`, backgroundColor: v.color }} />
-                    ) : null
-                  )}
-              </div>
-              <ul className="mt-5 grid grid-cols-2 gap-x-8 gap-y-2.5 text-sm">
-                {Object.entries(PROGRESS).map(([k, v]) => (
-                  <li key={k} className="flex items-center gap-2 text-[#475467]">
-                    <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[3px]" style={{ backgroundColor: v.color }} />
-                    {v.label}
-                    <span className="ml-auto font-semibold tabular-nums text-[#101828]">{counts[k]}</span>
-                  </li>
-                ))}
-              </ul>
+            <section aria-label="Needs attention" className={`${CARD} p-6`}>
+              <SectionHead
+                title="Needs attention"
+                subtitle={attention.length ? "The most important items first. Select one to open it." : "Everything is in order for this period."}
+                aside={
+                  attention.length > 0 ? (
+                    <span className="rounded-full bg-[#EDE9FB] px-2.5 py-0.5 text-xs font-semibold text-[#5B3FD0]">{attention.length}</span>
+                  ) : null
+                }
+              />
+              {attention.length === 0 ? (
+                <p className="rounded-xl bg-[#EEF8F3] px-4 py-8 text-center text-sm font-medium text-[#1F7A5C]">
+                  Nothing needs attention right now.
+                </p>
+              ) : (
+                <ul className="divide-y divide-[#F2F4F7]">
+                  {attention.slice(0, 6).map(({ row, tone, text }) => (
+                    <li key={row.ind.id}>
+                      <button
+                        type="button"
+                        onClick={() => goToIndicator(row)}
+                        className={`flex w-full items-start gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-[#F9FAFB] ${FOCUS}`}
+                      >
+                        <span className={`mt-0.5 shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${ATTENTION_STYLE[tone]}`}>
+                          {tone === "review" ? "Approve" : tone === "rejected" ? "Rejected" : tone === "missing" ? "Report" : tone === "off" ? "Off track" : "At risk"}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-[#101828]">{row.ind.name}</span>
+                          <span className="block text-xs text-[#667085]">{text}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {attention.length > 6 && (
+                <p className="mt-3 text-center text-xs text-[#667085]">
+                  and {attention.length - 6} more. Use the filters in the indicator table to see them all.
+                </p>
+              )}
             </section>
 
             <section aria-label="Achievement by period" className={`${CARD} p-6`}>
-              <SectionHead title="Achievement by period" subtitle="Average percentage of target, approved values" />
+              <SectionHead title="Progress over time" subtitle="Average percentage of target reached in each period (approved values)" />
               <TrendChart points={trend} />
+            </section>
+          </div>
+
+          {/* 3. Where is the progress strong or weak? */}
+          <div className="grid gap-5 lg:grid-cols-2">
+            <section aria-label="Progress by result" className={`${CARD} p-6`}>
+              <SectionHead title="Progress by result" subtitle={`Select a result to filter the table below. ${period}`} />
+              <ResultBars tiles={tiles} activeId={resultFilter} onPick={setResultFilter} />
             </section>
 
             <section aria-label="Reporting status" className={`${CARD} p-6`}>
-              <SectionHead title="Reporting status by level" subtitle={`Indicators with a target, ${period}`} />
+              <SectionHead title="Reporting status by level" subtitle={`How many indicators are approved, waiting or missing. ${period}`} />
               <StackedColumns groups={levelGroups} />
-            </section>
-
-            <section aria-label="Result heatmap" className={`${CARD} p-6`}>
-              <SectionHead title="Result coverage" subtitle={`Average percentage of target per result, ${period}`} />
-              {tiles.length === 0 ? (
-                <p className="py-14 text-center text-sm text-[#667085]">No results have a target this period.</p>
-              ) : (
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                  {tiles.map(({ result, pct }) => {
-                    const heat = pct === null ? { bg: "#F2F4F7", fg: "#667085" } : heatOf(pct);
-                    return (
-                      <button
-                        key={result.id}
-                        type="button"
-                        onClick={() => setResultFilter(result.id)}
-                        title={result.title}
-                        className={`flex min-h-[68px] flex-col justify-between rounded-md p-2.5 text-left transition hover:opacity-90 ${FOCUS}`}
-                        style={{ backgroundColor: heat.bg, color: heat.fg }}
-                      >
-                        <span className="line-clamp-2 text-[11px] font-medium leading-tight">{result.title}</span>
-                        <span className="text-xs font-semibold tabular-nums">{pct === null ? "No data" : `${pct}%`}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#475467]">
-                {HEAT.map((h) => (
-                  <li key={h.label} className="flex items-center gap-1.5">
-                    <span aria-hidden="true" className="h-2 w-2 rounded-[3px]" style={{ backgroundColor: h.bg }} />
-                    {h.label}
-                  </li>
-                ))}
-              </ul>
             </section>
           </div>
 
-          {/* Framework tree + indicators */}
-          <div className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
-            <nav aria-label="Results framework" className={`${CARD} h-fit p-3`}>
-              <p className="px-2 pb-2 text-[13px] font-medium text-[#667085]">Results framework</p>
-              <ul className="space-y-0.5">
-                {[{ id: "", title: "All results", depth: 0, level: -1 }, ...ordered].map((r) => {
-                  const active = resultFilter === r.id;
-                  return (
-                    <li key={r.id || "all"}>
-                      <button
-                        type="button"
-                        onClick={() => setResultFilter(r.id)}
-                        aria-current={active ? "true" : undefined}
-                        style={{ paddingLeft: `${10 + r.depth * 14}px` }}
-                        className={`w-full rounded-lg py-2 pr-2 text-left text-[13px] transition ${FOCUS} ${
-                          active ? "bg-[#EDE9FB] font-semibold text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
-                        }`}
-                      >
-                        {r.level >= 0 && (
-                          <span className="block text-[11px] font-medium text-[#98A2B3]">
-                            {fw.levels[r.level] ?? `Level ${r.level + 1}`}
-                          </span>
-                        )}
-                        {r.title}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </nav>
+          {/* 4. The detail: every indicator */}
+          <section id="indicator-table" aria-label="Indicators" className={`${CARD} scroll-mt-20 overflow-hidden`}>
+            <div className="px-6 pt-6">
+              <SectionHead
+                title="Indicator results"
+                subtitle={`Targets, reported values and approval status for ${period}`}
+                aside={
+                  resultFilter ? (
+                    <button type="button" onClick={() => setResultFilter("")} className={BTN_SM_LIGHT}>
+                      Showing one result · Show all
+                    </button>
+                  ) : null
+                }
+              />
 
-            <section aria-label="Indicators" className={`${CARD} overflow-hidden`}>
-              <div className="px-6 pt-6">
-                <SectionHead title="Indicator results" subtitle={`Targets, reported values and approval status for ${period}`} />
+              <div role="group" aria-label="Filter indicators" className="mb-4 flex flex-wrap gap-1.5">
+                {FILTERS.map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={rowFilter === id}
+                    onClick={() => setRowFilter(id)}
+                    className={`rounded-full px-3.5 py-1.5 text-[13px] font-medium transition ${FOCUS} ${
+                      rowFilter === id ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] ring-1 ring-inset ring-[#E5E7EB] hover:bg-[#F4F5F7]"
+                    }`}
+                  >
+                    {label} <span className="ml-1 tabular-nums opacity-70">{filterCounts[id]}</span>
+                  </button>
+                ))}
               </div>
 
               {!canEnter && (
-                <p className="mx-6 mb-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-2 text-[13px] text-[#667085]">
+                <p className="mb-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-2 text-[13px] text-[#667085]">
                   You can view these results. Only the administrator and the owning programme can report values.
                 </p>
               )}
+            </div>
 
-              <div className="max-h-[70vh] overflow-auto">
-                <table className="w-full min-w-[980px] text-left text-sm">
-                  <caption className="sr-only">Indicator results for {period}</caption>
-                  <thead>
-                    <tr className="text-xs font-medium text-[#667085]">
-                      {[
-                        ["Indicator", "px-6 text-left"],
-                        ["Baseline", "px-3 text-right"],
-                        ["Target", "px-3 text-right"],
-                        ["Reported value", "px-3 text-left"],
-                        ["Progress", "px-3 text-left"],
-                        ["Status", "px-3 text-left"],
-                      ].map(([label, cls]) => (
-                        <th
-                          key={label}
-                          scope="col"
-                          className={`sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] py-3 ${cls}`}
-                        >
-                          {label}
-                        </th>
-                      ))}
-                      <th scope="col" className="sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3 text-right">
-                        <span className="sr-only">Actions</span>
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full min-w-[980px] text-left text-sm">
+                <caption className="sr-only">Indicator results for {period}</caption>
+                <thead>
+                  <tr className="text-xs font-medium text-[#667085]">
+                    {[
+                      ["Indicator", "px-6 text-left"],
+                      ["Target", "px-3 text-right"],
+                      ["Reported value", "px-3 text-left"],
+                      ["Progress to target", "px-3 text-left"],
+                      ["Approval", "px-3 text-left"],
+                    ].map(([label, cls]) => (
+                      <th key={label} scope="col" className={`sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] py-3 ${cls}`}>
+                        {label}
                       </th>
-                    </tr>
-                  </thead>
+                    ))}
+                    <th scope="col" className="sticky top-0 z-10 border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3 text-right">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
 
-                  <tbody>
-                    {shownRows.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-sm text-[#667085]">
-                          No indicators under this result yet.
+                <tbody>
+                  {shownRows.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-sm text-[#667085]">
+                        No indicators match this view.
+                      </td>
+                    </tr>
+                  )}
+
+                  {shownRows.map(({ ind, result, saved, target, pct, progress }) => {
+                    const draft = draftFor(ind, saved);
+                    const locked = saved?.status === "approved";
+                    const review = REVIEW[saved?.status] ?? REVIEW.none;
+
+                    return (
+                      <tr key={ind.id} className="border-t border-[#F2F4F7] align-top transition hover:bg-[#FAFAFC]">
+                        <td className="px-6 py-4">
+                          <p className="max-w-sm font-medium leading-5 text-[#101828]">{ind.name}</p>
+                          <p className="mt-0.5 text-xs text-[#667085]">
+                            {result.title}
+                            {ind.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{ind.unit}</span> : null}
+                          </p>
+                          {isAdmin && strategic.length > 0 && (
+                            <select
+                              aria-label={`Strategic indicator for ${ind.name}`}
+                              value={ind.strategicId || ""}
+                              onChange={(e) => linkIndicator(ind, e.target.value)}
+                              disabled={busy}
+                              className={`${FIELD} mt-2 w-full max-w-xs py-1.5 text-xs`}
+                            >
+                              <option value="">Not linked to a strategic indicator</option>
+                              {strategic.map((s) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+
+                        <td className="px-3 py-4 text-right">
+                          <p className="font-semibold tabular-nums text-[#101828]">{fmt(target)}</p>
+                          <p className="mt-0.5 text-xs text-[#98A2B3]">Baseline {fmt(ind.baseline)}</p>
+                        </td>
+
+                        <td className="px-3 py-4">
+                          <div className="space-y-1.5">
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              placeholder="Enter value"
+                              aria-label={`Actual for ${ind.name}`}
+                              value={draft.actual}
+                              onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
+                              disabled={!canEnter || locked || busy}
+                              className={`${FIELD} w-32 tabular-nums`}
+                            />
+                            <input
+                              type="text"
+                              placeholder="Add a comment (optional)"
+                              aria-label={`Comment for ${ind.name}`}
+                              value={draft.comment}
+                              onChange={(e) => setDraft(ind, saved, { comment: e.target.value })}
+                              disabled={!canEnter || locked || busy}
+                              className={`${FIELD} w-52`}
+                            />
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-4">
+                          <div className="w-40">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="flex items-center gap-1.5 font-medium text-[#344054]">
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: PROGRESS[progress].color }} />
+                                {PROGRESS[progress].label}
+                              </span>
+                              {pct !== null && <span className="font-semibold tabular-nums text-[#101828]">{pct}%</span>}
+                            </div>
+                            <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+                              <div className="h-full rounded-full" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[progress].color }} />
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-4">
+                          <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${review.cls}`}>
+                            {review.label}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <div className="flex justify-end gap-2">
+                            {canEnter && !locked && (
+                              <button type="button" onClick={() => submitValue(ind, saved)} disabled={busy} className={BTN_SM}>
+                                Submit
+                              </button>
+                            )}
+                            {isAdmin && saved?.status === "submitted" && (
+                              <>
+                                <button type="button" onClick={() => reviewValue(ind, true)} disabled={busy} className={BTN_SM}>
+                                  Approve
+                                </button>
+                                <button type="button" onClick={() => reviewValue(ind, false)} disabled={busy} className={BTN_SM_LIGHT}>
+                                  Reject
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
-                    )}
-
-                    {shownRows.map(({ ind, result, saved, target, pct, progress }) => {
-                      const draft = draftFor(ind, saved);
-                      const locked = saved?.status === "approved";
-                      const review = REVIEW[saved?.status] ?? REVIEW.none;
-
-                      return (
-                        <tr key={ind.id} className="border-t border-[#F2F4F7] align-top transition hover:bg-[#FAFAFC]">
-                          <td className="px-6 py-4">
-                            <p className="max-w-sm font-medium leading-5 text-[#101828]">{ind.name}</p>
-                            <p className="mt-0.5 text-xs text-[#667085]">
-                              {result.title}
-                              {ind.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{ind.unit}</span> : null}
-                            </p>
-                            {isAdmin && strategic.length > 0 && (
-                              <select
-                                aria-label={`Strategic indicator for ${ind.name}`}
-                                value={ind.strategicId || ""}
-                                onChange={(e) => linkIndicator(ind, e.target.value)}
-                                disabled={busy}
-                                className={`${FIELD} mt-2 w-full max-w-xs py-1.5 text-xs`}
-                              >
-                                <option value="">Not linked to a strategic indicator</option>
-                                {strategic.map((s) => (
-                                  <option key={s.id} value={s.id}>{s.name}</option>
-                                ))}
-                              </select>
-                            )}
-                          </td>
-
-                          <td className="px-3 py-4 text-right tabular-nums text-[#475467]">{fmt(ind.baseline)}</td>
-                          <td className="px-3 py-4 text-right font-medium tabular-nums text-[#101828]">{fmt(target)}</td>
-
-                          <td className="px-3 py-4">
-                            <div className="space-y-1.5">
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="Value"
-                                aria-label={`Actual for ${ind.name}`}
-                                value={draft.actual}
-                                onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
-                                disabled={!canEnter || locked || busy}
-                                className={`${FIELD} w-28 tabular-nums`}
-                              />
-                              <input
-                                type="text"
-                                placeholder="Add a comment"
-                                aria-label={`Comment for ${ind.name}`}
-                                value={draft.comment}
-                                onChange={(e) => setDraft(ind, saved, { comment: e.target.value })}
-                                disabled={!canEnter || locked || busy}
-                                className={`${FIELD} w-48`}
-                              />
-                            </div>
-                          </td>
-
-                          <td className="px-3 py-4">
-                            <div className="w-36">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="flex items-center gap-1.5 font-medium text-[#344054]">
-                                  <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: PROGRESS[progress].color }} />
-                                  {PROGRESS[progress].label}
-                                </span>
-                                {pct !== null && <span className="tabular-nums text-[#667085]">{pct}%</span>}
-                              </div>
-                              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
-                                <div className="h-full rounded-full" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[progress].color }} />
-                              </div>
-                            </div>
-                          </td>
-
-                          <td className="px-3 py-4">
-                            <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${review.cls}`}>
-                              {review.label}
-                            </span>
-                          </td>
-
-                          <td className="px-6 py-4">
-                            <div className="flex justify-end gap-2">
-                              {canEnter && !locked && (
-                                <button type="button" onClick={() => submitValue(ind, saved)} disabled={busy} className={BTN_SM}>
-                                  Submit
-                                </button>
-                              )}
-                              {isAdmin && saved?.status === "submitted" && (
-                                <>
-                                  <button type="button" onClick={() => reviewValue(ind, true)} disabled={busy} className={BTN_SM}>
-                                    Approve
-                                  </button>
-                                  <button type="button" onClick={() => reviewValue(ind, false)} disabled={busy} className={BTN_SM_LIGHT}>
-                                    Reject
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </>
       )}
     </div>

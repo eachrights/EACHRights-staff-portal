@@ -15,6 +15,56 @@ import {
 import Header from "../../components/Header";
 import Sidebar from "../../components/Sidebar";
 
+/*
+ * Same user pool import that Login.jsx uses (named export from cognito).
+ */
+import { userPool } from "../../cognito";
+
+/* Change the signed-in user's Cognito password. Needs the current password. */
+function changeCognitoPassword(oldPassword, newPassword) {
+  return new Promise((resolve, reject) => {
+    const user = userPool.getCurrentUser();
+    if (!user) return reject(new Error("You are signed out. Sign in again."));
+
+    user.getSession((err, session) => {
+      if (err || !session?.isValid()) {
+        return reject(new Error("Your session expired. Sign in again."));
+      }
+      user.changePassword(oldPassword, newPassword, (changeErr) =>
+        changeErr ? reject(changeErr) : resolve()
+      );
+    });
+  });
+}
+
+function passwordProblem({ currentPassword, newPassword, confirmPassword }) {
+  if (!currentPassword) return "Enter your current password.";
+  if (
+    newPassword.length < 8 ||
+    !/[a-z]/.test(newPassword) ||
+    !/[A-Z]/.test(newPassword) ||
+    !/\d/.test(newPassword)
+  ) {
+    return "The new password needs 8 or more characters, with upper and lower case letters and a number.";
+  }
+  if (newPassword !== confirmPassword) return "The new passwords do not match.";
+  if (newPassword === currentPassword) return "Choose a password different from the current one.";
+  return "";
+}
+
+function passwordErrorText(err) {
+  switch (err?.name || err?.code) {
+    case "NotAuthorizedException":
+      return "The current password is incorrect.";
+    case "InvalidPasswordException":
+      return "That password does not meet the pool's rules. Make it longer or add a symbol.";
+    case "LimitExceededException":
+      return "Too many attempts. Wait a few minutes and try again.";
+    default:
+      return err?.message || "Could not change the password.";
+  }
+}
+
 function Settings() {
   const [activeTab, setActiveTab] = useState("organization");
   const [saved, setSaved] = useState(false);
@@ -51,6 +101,10 @@ function Settings() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [pwDone, setPwDone] = useState(false);
+
   const handleOrganizationChange = (e) => {
     const { name, value } = e.target;
 
@@ -63,6 +117,8 @@ function Settings() {
   const handleSecurityChange = (e) => {
     const { name, value } = e.target;
 
+    setPwDone(false);
+    setPwError("");
     setSecurity((previous) => ({
       ...previous,
       [name]: value,
@@ -93,6 +149,26 @@ function Settings() {
     setTimeout(() => {
       setSaved(false);
     }, 3000);
+  };
+
+  const handlePasswordChange = async () => {
+    setPwError("");
+    setPwDone(false);
+
+    const problem = passwordProblem(security);
+    if (problem) return setPwError(problem);
+
+    setPwBusy(true);
+    try {
+      await changeCognitoPassword(security.currentPassword, security.newPassword);
+      setSecurity({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setPwDone(true);
+    } catch (err) {
+      console.error("Change password error:", err);
+      setPwError(passwordErrorText(err));
+    } finally {
+      setPwBusy(false);
+    }
   };
 
   const tabs = [
@@ -310,6 +386,7 @@ function Settings() {
                         onChange={handleSecurityChange}
                         visible={showCurrentPassword}
                         setVisible={setShowCurrentPassword}
+                        autoComplete="current-password"
                       />
 
                       <PasswordInput
@@ -319,6 +396,7 @@ function Settings() {
                         onChange={handleSecurityChange}
                         visible={showNewPassword}
                         setVisible={setShowNewPassword}
+                        autoComplete="new-password"
                       />
 
                       <PasswordInput
@@ -328,6 +406,7 @@ function Settings() {
                         onChange={handleSecurityChange}
                         visible={showConfirmPassword}
                         setVisible={setShowConfirmPassword}
+                        autoComplete="new-password"
                       />
 
                       <div className="rounded-lg bg-gray-50 p-4">
@@ -354,7 +433,36 @@ function Settings() {
                         </div>
                       </div>
 
-                      <SaveButton saved={saved} onClick={handleSave} />
+                      {pwError && (
+                        <p
+                          role="alert"
+                          className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700"
+                        >
+                          {pwError}
+                        </p>
+                      )}
+
+                      {pwDone && (
+                        <p
+                          role="status"
+                          className="flex items-center gap-2 text-sm font-medium text-green-700"
+                        >
+                          <CheckCircle2 size={18} />
+                          Password changed.
+                        </p>
+                      )}
+
+                      <div className="flex justify-end border-t border-gray-200 pt-5">
+                        <button
+                          type="button"
+                          onClick={handlePasswordChange}
+                          disabled={pwBusy}
+                          className="inline-flex items-center gap-2 rounded-lg bg-green-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-800 disabled:opacity-60"
+                        >
+                          <Save size={17} />
+                          {pwBusy ? "Changing..." : "Change password"}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -526,6 +634,7 @@ function PasswordInput({
   onChange,
   visible,
   setVisible,
+  autoComplete,
 }) {
   return (
     <div>
@@ -539,12 +648,14 @@ function PasswordInput({
           name={name}
           value={value}
           onChange={onChange}
+          autoComplete={autoComplete}
           className="w-full rounded-lg border border-gray-300 px-4 py-3 pr-12 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-100"
         />
 
         <button
           type="button"
           onClick={() => setVisible(!visible)}
+          aria-label={visible ? "Hide password" : "Show password"}
           className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
         >
           {visible ? <EyeOff size={18} /> : <Eye size={18} />}

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Menu, Search, Plus, Settings, LogOut, ChevronDown } from "lucide-react";
+import { signOut, getSignedInEmail } from "../utils/signOut";
 
 /*
- * Top bar: search, "New file" and the account menu.
+ * Top bar: search, "New file", sign out and the account menu.
  * Searching sends the user to /admin?q=term, where the file list filters.
+ *
+ * Sign out works on every page by itself: pages do not need to pass
+ * onLogout or email. If a page does pass them, those are used instead.
  */
 function Header({ email = "", onMenuClick, onLogout }) {
   const navigate = useNavigate();
@@ -17,6 +21,9 @@ function Header({ email = "", onMenuClick, onLogout }) {
     () => new URLSearchParams(location.search).get("q") || ""
   );
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const handleLogout = onLogout || signOut;
+  const displayEmail = email || getSignedInEmail();
 
   // Keep the box in sync when the URL changes (for example "clear search")
   useEffect(() => {
@@ -68,7 +75,7 @@ function Header({ email = "", onMenuClick, onLogout }) {
     navigate(term ? `/admin?q=${encodeURIComponent(term)}` : "/admin");
   };
 
-  const initial = (email || "A").trim().charAt(0).toUpperCase();
+  const initial = (displayEmail || "A").trim().charAt(0).toUpperCase();
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-[#DDE2DB] bg-white px-4 sm:px-6">
@@ -124,6 +131,17 @@ function Header({ email = "", onMenuClick, onLogout }) {
           <Settings size={19} />
         </Link>
 
+        {/* Always-visible sign out, on every page */}
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Sign out"
+          title="Sign out"
+          className="hidden rounded-lg p-2.5 text-slate-500 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#C8963E] sm:block"
+        >
+          <LogOut size={19} />
+        </button>
+
         <div ref={menuRef} className="relative">
           <button
             type="button"
@@ -137,7 +155,7 @@ function Header({ email = "", onMenuClick, onLogout }) {
             </span>
 
             <span className="hidden max-w-[160px] truncate text-sm font-medium text-[#16211C] md:block">
-              {email || "Administrator"}
+              {displayEmail || "Administrator"}
             </span>
 
             <ChevronDown size={15} className="hidden text-slate-400 md:block" />
@@ -151,7 +169,7 @@ function Header({ email = "", onMenuClick, onLogout }) {
               <div className="border-b border-[#E8ECE6] px-4 py-3">
                 <p className="text-xs text-slate-400">Signed in as</p>
                 <p className="mt-0.5 truncate text-sm font-medium">
-                  {email || "Administrator"}
+                  {displayEmail || "Administrator"}
                 </p>
               </div>
 
@@ -170,7 +188,7 @@ function Header({ email = "", onMenuClick, onLogout }) {
                 role="menuitem"
                 onClick={() => {
                   setMenuOpen(false);
-                  onLogout?.();
+                  handleLogout();
                 }}
                 className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50"
               >
