@@ -33,6 +33,7 @@ import {
   getAccess,
   PROGRAM_AREAS,
 } from "../access";
+import { LABELS } from "../labels";
 
 /*
  * File-tree navigation. Every href must match a <Route> in App.jsx.
@@ -55,7 +56,7 @@ const ME_GROUPS = [
   {
     label: "Workspace",
     items: [
-      { name: "Projects", href: "/me-dashboard/projects", icon: FolderOpen },
+      { name: LABELS.projects, href: "/me-dashboard/projects", icon: FolderOpen },
       { name: "Dashboards", href: "/me-dashboard", icon: LayoutDashboard },
       { name: "Frameworks", href: "/me-dashboard/frameworks", icon: FolderKanban },
       { name: "Indicators", href: "/me-dashboard/indicators", icon: Gauge },
@@ -350,14 +351,14 @@ function Sidebar({ mobileOpen, onClose }) {
                       onClick={onClose}
                     >
                       <FolderIcon />
-                      <span className="flex-1">Programs</span>
+                      <span className="flex-1">{LABELS.programmes}</span>
                     </TreeLink>
 
                     <button
                       type="button"
                       onClick={() => setProgramsOpen((open) => !open)}
                       aria-expanded={programsOpen}
-                      aria-label={programsOpen ? "Collapse programs" : "Expand programs"}
+                      aria-label={programsOpen ? `Collapse ${LABELS.programmes}` : `Expand ${LABELS.programmes}`}
                       className={`ml-1 rounded-lg p-1.5 text-[#98A2B3] hover:bg-[#F3F6F5] hover:text-[#0B2B24] ${FOCUS}`}
                     >
                       <ChevronDown

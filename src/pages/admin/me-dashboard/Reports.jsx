@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEPARTMENT_AREAS, PROGRAM_AREAS } from "../../../access";
 import { api, downloadCsv } from "../../../meApi";
+import { LABELS } from "../../../labels";
 import {
   BTN, BTN_LIGHT, CARD, CardHead, ErrorBar, FIELD, FrameworkSelect, NoFramework, Page, PageHead, PeriodTabs,
   PROGRESS, ProgressDot, progressOf, useMEData,
@@ -20,7 +21,7 @@ const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "
 const VIEWS = [
   ["visual", "Visual report"],
   ["table", "Table-based report"],
-  ["program", "Program report"],
+  ["program", LABELS.programmeReport],
 ];
 
 const CHARTS = [
@@ -485,7 +486,7 @@ function ProgramReport({ frameworks }) {
   return (
     <>
       <div className={`${CARD} flex flex-wrap items-center gap-3 p-4 print:hidden`}>
-        <label htmlFor="programme" className="text-xs font-medium text-[#667085]">Programme</label>
+        <label htmlFor="programme" className="text-xs font-medium text-[#667085]">{LABELS.programme}</label>
         <select id="programme" className={FIELD} value={slug} onChange={(e) => setSlug(e.target.value)}>
           {programmes.map((p) => (
             <option key={p.slug} value={p.slug}>{p.name}</option>
@@ -499,14 +500,14 @@ function ProgramReport({ frameworks }) {
       {loaded && (
         <article className={`${CARD} space-y-7 p-8 print:border-0 print:p-0 print:shadow-none`} aria-label="Program report">
           <header className="border-b border-[#EEF0F4] pb-5">
-            <h2 className="text-xl font-semibold tracking-tight text-[#101828]">{areaName(slug)}: programme report</h2>
+            <h2 className="text-xl font-semibold tracking-tight text-[#101828]">{areaName(slug)}: {LABELS.programmeReport.toLowerCase()}</h2>
             <p className="mt-1 text-sm text-[#667085]">
               {projects.length} {projects.length === 1 ? "project" : "projects"} · {totals.indicators} indicators · {totals.reported} of {totals.expected} targets reported and approved
             </p>
           </header>
 
           <section>
-            <CardHead title="Projects in this programme" />
+            <CardHead title={`${LABELS.projects} in this ${LABELS.programme.toLowerCase()}`} />
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-sm">
                 <thead>

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { DEPARTMENT_AREAS, PROGRAM_AREAS, getAccess } from "../../../access";
 import { api } from "../../../meApi";
+import { LABELS } from "../../../labels";
 import { BTN, BTN_LIGHT, CARD, ErrorBar, FIELD, Page, PageHead, orderResults } from "./Shared";
+import PeopleAccess from "./PeopleAccess";
 
 /* One page for projects: the list (current to previous), and the dashboard of the
    project you open from it. The chosen project is kept in the address as ?project=<id>,
@@ -224,9 +226,9 @@ function ProjectList({ onOpen }) {
 
   return (
     <Page>
-      <PageHead title="Projects" subtitle="All projects, from current to previous.">
+      <PageHead title={LABELS.projects} subtitle={`All ${LABELS.projectsLower}, from current to previous.`}>
         {isAdmin && (
-          <Link to="/me-dashboard/frameworks" className={BTN}>+ Add new project</Link>
+          <Link to="/me-dashboard/frameworks" className={BTN}>+ Add new {LABELS.projectLower}</Link>
         )}
       </PageHead>
 
@@ -234,8 +236,8 @@ function ProjectList({ onOpen }) {
 
       {/* Summary */}
       {frameworks && (
-        <section aria-label="Project summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Tile label="All projects" value={counts.all} note="Across every thematic area" />
+        <section aria-label={`${LABELS.project} summary`} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Tile label={`All ${LABELS.projectsLower}`} value={counts.all} note={`Across every ${LABELS.programme.toLowerCase()}`} />
           <Tile label="Current" value={counts.current} color={DOT.current} note="Running today" />
           <Tile label="Upcoming" value={counts.upcoming} color={DOT.upcoming} note="Not started yet" />
           <Tile label="Previous" value={counts.past} color={DOT.past} note="Already ended" />
@@ -244,7 +246,7 @@ function ProjectList({ onOpen }) {
 
       {missingDates && (
         <p className="rounded-lg border border-[#F4D9C6] bg-[#FDF1E8] px-4 py-2.5 text-[13px] text-[#9A5410]">
-          Some projects have no start or end date, theme or other details, so they all count as current.
+          Some {LABELS.projectsLower} have no start or end date, theme or other details, so they all count as current.
           {isAdmin
             ? " Open a project and choose Edit details to fill them in."
             : " Ask the administrator to fill them in."}
@@ -270,14 +272,14 @@ function ProjectList({ onOpen }) {
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <input className={`${FIELD} w-56`} placeholder="Search projects" aria-label="Search projects" value={query} onChange={(e) => setQuery(e.target.value)} />
-          <select aria-label="Thematic area" className={FIELD} value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
-            <option value="">All thematic areas</option>
+          <input className={`${FIELD} w-56`} placeholder={`Search ${LABELS.projectsLower}`} aria-label={`Search ${LABELS.projectsLower}`} value={query} onChange={(e) => setQuery(e.target.value)} />
+          <select aria-label={LABELS.programme} className={FIELD} value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
+            <option value="">All {LABELS.programmes.toLowerCase()}</option>
             {areaOptions.map((slug) => (
               <option key={slug} value={slug}>{areaName(slug)}</option>
             ))}
           </select>
-          <select aria-label="Sort projects" className={FIELD} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+          <select aria-label={`Sort ${LABELS.projectsLower}`} className={FIELD} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
             {Object.entries(SORTS).map(([id, label]) => (
               <option key={id} value={id}>{label}</option>
             ))}
@@ -315,11 +317,11 @@ function ProjectList({ onOpen }) {
         </p>
       )}
 
-      {!frameworks && !error && <p className="py-10 text-center text-[#98A2B3]">Loading projects...</p>}
+      {!frameworks && !error && <p className="py-10 text-center text-[#98A2B3]">Loading {LABELS.projectsLower}...</p>}
 
       {frameworks && projects.length === 0 && (
         <div className={`${CARD} px-6 py-12 text-center`}>
-          <p className="text-sm font-medium text-[#101828]">No projects found</p>
+          <p className="text-sm font-medium text-[#101828]">No {LABELS.projectsLower} found</p>
           <p className="mt-1 text-sm text-[#667085]">Try a different search or clear the filters.</p>
         </div>
       )}
@@ -331,7 +333,7 @@ function ProjectList({ onOpen }) {
             <thead>
               <tr className="bg-[#F9FAFB] text-xs font-medium text-[#667085]">
                 <th scope="col" className="px-5 py-3">Name</th>
-                <th scope="col" className="px-3 py-3">Thematic area</th>
+                <th scope="col" className="px-3 py-3">{LABELS.programme}</th>
                 <th scope="col" className="px-3 py-3">Theme</th>
                 <th scope="col" className="px-3 py-3">Start date</th>
                 <th scope="col" className="px-3 py-3">End date</th>
@@ -493,6 +495,16 @@ function PeriodColumns({ groups }) {
 
 const splitList = (s) => s.split(",").map((v) => v.trim()).filter(Boolean);
 
+/* Defined outside the editor so typing does not remount the inputs */
+function Field({ label, children, wide = false }) {
+  return (
+    <label className={`block text-xs font-medium text-[#667085] ${wide ? "sm:col-span-2" : ""}`}>
+      {label}
+      <div className="mt-1">{children}</div>
+    </label>
+  );
+}
+
 function DetailsEditor({ fw, frameworkId, onSaved, onCancel }) {
   const [form, setForm] = useState({
     donor: fw.donor || "",
@@ -506,7 +518,6 @@ function DetailsEditor({ fw, frameworkId, onSaved, onCancel }) {
     currency: fw.currency || "",
     description: fw.description || "",
     countries: (fw.countries || []).join(", "),
-    team: (fw.team || []).join(", "),
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -538,7 +549,6 @@ function DetailsEditor({ fw, frameworkId, onSaved, onCancel }) {
           currency: form.currency.trim(),
           description: form.description.trim(),
           countries: splitList(form.countries),
-          team: splitList(form.team),
         },
       });
       await onSaved();
@@ -548,13 +558,6 @@ function DetailsEditor({ fw, frameworkId, onSaved, onCancel }) {
       setBusy(false);
     }
   };
-
-  const Field = ({ label, children, wide = false }) => (
-    <label className={`block text-xs font-medium text-[#667085] ${wide ? "sm:col-span-2" : ""}`}>
-      {label}
-      <div className="mt-1">{children}</div>
-    </label>
-  );
 
   return (
     <section className={`${CARD} p-6`} aria-label="Edit project details">
@@ -573,7 +576,6 @@ function DetailsEditor({ fw, frameworkId, onSaved, onCancel }) {
           <Field label="Currency"><input className={`${FIELD} w-full`} value={form.currency} onChange={set("currency")} placeholder="USD" maxLength={8} /></Field>
         </div>
         <Field label="Countries (separate with commas)" wide><input className={`${FIELD} w-full`} value={form.countries} onChange={set("countries")} placeholder="Kenya, Uganda" /></Field>
-        <Field label="Project team (names or emails, separated with commas)" wide><input className={`${FIELD} w-full`} value={form.team} onChange={set("team")} /></Field>
         <Field label="Description" wide><textarea rows={3} maxLength={500} className={`${FIELD} w-full`} value={form.description} onChange={set("description")} /></Field>
       </div>
       <div className="mt-5 flex gap-2">
@@ -685,14 +687,13 @@ function ProjectView({ frameworkId, onBack }) {
   const end = time(fw?.endDate);
   const themes = [fw?.theme, fw?.focusArea].filter(Boolean);
   const countries = Array.isArray(fw?.countries) ? fw.countries : fw?.country ? [fw.country] : [];
-  const team = Array.isArray(fw?.team) ? fw.team : [];
 
   if (!fw) {
     return (
       <Page>
         <ErrorBar error={error} />
         {!error && <p className="py-10 text-center text-sm text-[#98A2B3]">Loading project...</p>}
-        {error && <button type="button" className={BTN_LIGHT} onClick={() => onBack()}>All projects</button>}
+        {error && <button type="button" className={BTN_LIGHT} onClick={() => onBack()}>All {LABELS.projectsLower}</button>}
       </Page>
     );
   }
@@ -713,7 +714,7 @@ function ProjectView({ frameworkId, onBack }) {
     <Page>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button type="button" onClick={onBack} className="text-sm font-medium text-[#5B3FD0] hover:underline">
-          &larr; All projects
+          &larr; All {LABELS.projectsLower}
         </button>
         {access.isAdmin && !editing && (
           <button type="button" onClick={() => setEditing(true)} className={BTN_LIGHT}>Edit details</button>
@@ -738,7 +739,7 @@ function ProjectView({ frameworkId, onBack }) {
       <section className={`${CARD} p-6`} aria-label="Project overview">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-[#101828]">Project: {fw.name}</h1>
+            <h1 className="text-xl font-semibold text-[#101828]">{LABELS.project}: {fw.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-3">
               <StateBadge state={state} />
               {info && <span className="text-[13px] text-[#667085]">{info.label}</span>}
@@ -767,7 +768,7 @@ function ProjectView({ frameworkId, onBack }) {
         <div className="mt-5 grid gap-x-10 gap-y-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
           <div>
             <dl>
-              <Row label="Thematic area"><Chip dark>{areaName(fw.area) || "-"}</Chip></Row>
+              <Row label={LABELS.programme}><Chip dark>{areaName(fw.area) || "-"}</Chip></Row>
               {themes.length > 0 && (
                 <Row label="Themes">
                   {themes.map((t) => (
@@ -888,15 +889,7 @@ function ProjectView({ frameworkId, onBack }) {
             </dl>
 
             <div className="mt-3">
-              <h2 className="text-sm text-[#667085]">Project team</h2>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {team.length === 0 && <span className="text-sm text-[#98A2B3]">No team members listed</span>}
-                {team.map((m) => (
-                  <span key={m} title={m} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#EDE9FB] text-xs font-semibold text-[#5B3FD0]">
-                    {initials(m)}
-                  </span>
-                ))}
-              </div>
+              <PeopleAccess frameworkId={frameworkId} isAdmin={access.isAdmin} />
             </div>
           </div>
         </div>

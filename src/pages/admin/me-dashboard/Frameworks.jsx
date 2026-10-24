@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { DEPARTMENT_AREAS, PROGRAM_AREAS, getAccess } from "../../../access";
 import { api } from "../../../meApi";
+import { LABELS } from "../../../labels";
 import { BTN, BTN_LIGHT, CARD, CardHead, ErrorBar, FIELD, NoFramework, Page, PageHead, useMEData } from "./Shared";
+import PeopleAccess from "./PeopleAccess";
 
 const AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "No area";
@@ -18,13 +20,95 @@ const SMALL_DANGER =
 
 const fmtNum = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 
+const fmtDay = (s) => {
+  const t = s ? new Date(s).getTime() : NaN;
+  return Number.isNaN(t) ? "" : new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
+const initials = (name = "") =>
+  name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join("") || "?";
+
+/* ---------- Initiative details (dates, theme, budget and so on) ---------- */
+
+const splitList = (s) => s.split(",").map((v) => v.trim()).filter(Boolean);
+
+const EMPTY_DETAILS = {
+  theme: "", focusArea: "", partner: "", region: "",
+  startDate: "", endDate: "", budget: "", currency: "", countries: "", description: "",
+};
+
+const detailsFrom = (fw) => ({
+  theme: fw.theme || "",
+  focusArea: fw.focusArea || "",
+  partner: fw.partner || "",
+  region: fw.region || "",
+  startDate: fw.startDate || "",
+  endDate: fw.endDate || "",
+  budget: fw.budget ?? "",
+  currency: fw.currency || "",
+  countries: (fw.countries || []).join(", "),
+  description: fw.description || "",
+});
+
+/* The request body for these fields. Theme, focus area, partner and region always go together. */
+const detailsBody = (d) => ({
+  theme: d.theme.trim(),
+  focusArea: d.focusArea.trim(),
+  partner: d.partner.trim(),
+  region: d.region.trim(),
+  startDate: d.startDate,
+  endDate: d.endDate,
+  budget: d.budget === "" ? "" : Number(d.budget),
+  currency: d.currency.trim(),
+  description: d.description.trim(),
+  countries: splitList(d.countries),
+});
+
+function detailsProblem(d) {
+  if (d.startDate && d.endDate && d.endDate < d.startDate) return "The end date cannot be before the start date.";
+  if (d.budget !== "" && (Number.isNaN(Number(d.budget)) || Number(d.budget) < 0)) return "The budget must be a number, zero or more.";
+  return "";
+}
+
+/* Defined outside the forms so typing does not remount the inputs */
+function Field({ label, children, wide = false }) {
+  return (
+    <label className={`block text-xs font-medium text-[#667085] ${wide ? "sm:col-span-2" : ""}`}>
+      {label}
+      <div className="mt-1">{children}</div>
+    </label>
+  );
+}
+
+function DetailFields({ value, onChange }) {
+  const set = (key) => (e) => onChange({ ...value, [key]: e.target.value });
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Start date"><input type="date" className={`${FIELD} w-full`} value={value.startDate} onChange={set("startDate")} /></Field>
+      <Field label="End date"><input type="date" className={`${FIELD} w-full`} value={value.endDate} onChange={set("endDate")} /></Field>
+      <Field label="Theme"><input className={`${FIELD} w-full`} value={value.theme} onChange={set("theme")} placeholder="For example Health" /></Field>
+      <Field label="Focus area"><input className={`${FIELD} w-full`} value={value.focusArea} onChange={set("focusArea")} placeholder="For example Gender" /></Field>
+      <Field label="Partner"><input className={`${FIELD} w-full`} value={value.partner} onChange={set("partner")} /></Field>
+      <Field label="Region"><input className={`${FIELD} w-full`} value={value.region} onChange={set("region")} /></Field>
+      <div className="grid grid-cols-[1fr_6rem] gap-3">
+        <Field label="Budget"><input type="number" min="0" className={`${FIELD} w-full`} value={value.budget} onChange={set("budget")} /></Field>
+        <Field label="Currency"><input className={`${FIELD} w-full`} value={value.currency} onChange={set("currency")} placeholder="USD" maxLength={8} /></Field>
+      </div>
+      <Field label="Countries (separate with commas)"><input className={`${FIELD} w-full`} value={value.countries} onChange={set("countries")} placeholder="Kenya, Uganda" /></Field>
+      <Field label="Description" wide><textarea rows={3} maxLength={500} className={`${FIELD} w-full`} value={value.description} onChange={set("description")} /></Field>
+    </div>
+  );
+}
+
 function MEFrameworks() {
   const { isAdmin, frameworks, selectedId, setSelectedId, data, fw, ordered, busy, error, run, loadList, reload } = useMEData();
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ name: "", donor: "", area: AREAS[0]?.slug || "", periods: "2026-Q1, 2026-Q2, 2026-Q3, 2026-Q4" });
+  const [newDetails, setNewDetails] = useState(EMPTY_DETAILS);
   const [rf, setRf] = useState({ title: "", level: 0, parentId: "" });
   const [editingFw, setEditingFw] = useState(false);
   const [fwDraft, setFwDraft] = useState({ name: "", donor: "", area: "" });
+  const [detailsDraft, setDetailsDraft] = useState(EMPTY_DETAILS);
   const [editingResult, setEditingResult] = useState(null);
   const [resultTitle, setResultTitle] = useState("");
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
@@ -51,26 +135,36 @@ function MEFrameworks() {
       const periods = form.periods.split(",").map((p) => p.trim()).filter(Boolean);
       if (!form.name.trim()) throw new Error("Give the framework a name.");
       if (periods.length === 0) throw new Error("Add at least one reporting period.");
+      const problem = detailsProblem(newDetails);
+      if (problem) throw new Error(problem);
       const { id } = await api("/me/frameworks", {
         method: "POST",
-        body: { name: form.name.trim(), donor: form.donor.trim(), area: newArea, periods },
+        body: { name: form.name.trim(), donor: form.donor.trim(), area: newArea, periods, ...detailsBody(newDetails) },
       });
       setShowNew(false);
       setForm((f) => ({ ...f, name: "", donor: "" }));
+      setNewDetails(EMPTY_DETAILS);
       await loadList(id);
     });
 
   const startEditFramework = () => {
     setFwDraft({ name: fw.name, donor: fw.donor || "", area: fw.area });
+    setDetailsDraft(detailsFrom(fw));
     setEditingFw(true);
   };
 
   const saveFramework = () =>
     run(async () => {
       if (!fwDraft.name.trim()) throw new Error("Give the framework a name.");
+      const problem = detailsProblem(detailsDraft);
+      if (problem) throw new Error(problem);
       await api(`/me/frameworks/${selectedId}`, {
         method: "PUT",
         body: { name: fwDraft.name.trim(), donor: fwDraft.donor.trim(), area: fwDraft.area },
+      });
+      await api(`/me/frameworks/${selectedId}/details`, {
+        method: "PUT",
+        body: { donor: fwDraft.donor.trim(), ...detailsBody(detailsDraft) },
       });
       setEditingFw(false);
       await loadList(selectedId);
@@ -127,6 +221,10 @@ function MEFrameworks() {
     ? ordered.flatMap((r) => data.indicators.filter((i) => i.resultId === r.id).map((i) => ({ r, i })))
     : [];
 
+  const dates = fw && (fw.startDate || fw.endDate) ? `${fmtDay(fw.startDate) || "Not set"} to ${fmtDay(fw.endDate) || "Not set"}` : "Not set";
+  const themes = fw ? [fw.theme, fw.focusArea].filter(Boolean).join(", ") : "";
+  const countries = Array.isArray(fw?.countries) ? fw.countries.join(", ") : "";
+
   return (
     <Page>
       <PageHead title="Frameworks" subtitle="Results frameworks and the indicators that measure them.">
@@ -141,16 +239,19 @@ function MEFrameworks() {
 
       {showNew && canCreate && (
         <section className={`${CARD} p-5`} aria-label="New framework">
-          <CardHead title="New framework" subtitle="Periods are comma separated, for example 2026-Q1, 2026-Q2." />
+          <CardHead title="New framework" subtitle="Periods are comma separated, for example 2026-Q1, 2026-Q2. Dates decide whether it shows as current, upcoming or previous." />
           <div className="grid gap-3 sm:grid-cols-2">
             <input className={FIELD} placeholder="Framework name" aria-label="Framework name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <input className={FIELD} placeholder="Donor" aria-label="Donor" value={form.donor} onChange={(e) => setForm({ ...form, donor: e.target.value })} />
-            <select className={FIELD} aria-label="Area" value={newArea} onChange={(e) => setForm({ ...form, area: e.target.value })}>
+            <select className={FIELD} aria-label={LABELS.programme} value={newArea} onChange={(e) => setForm({ ...form, area: e.target.value })}>
               {myAreas.map((a) => (
                 <option key={a.slug} value={a.slug}>{a.name}</option>
               ))}
             </select>
             <input className={FIELD} placeholder="Periods" aria-label="Periods" value={form.periods} onChange={(e) => setForm({ ...form, periods: e.target.value })} />
+          </div>
+          <div className="mt-4">
+            <DetailFields value={newDetails} onChange={setNewDetails} />
           </div>
           <div className="mt-4 flex gap-2">
             <button type="button" onClick={createFramework} disabled={busy} className={BTN}>Create framework</button>
@@ -200,11 +301,14 @@ function MEFrameworks() {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <input className={`${FIELD} sm:col-span-2`} aria-label="Framework name" value={fwDraft.name} onChange={(e) => setFwDraft({ ...fwDraft, name: e.target.value })} />
                       <input className={FIELD} placeholder="Donor" aria-label="Donor" value={fwDraft.donor} onChange={(e) => setFwDraft({ ...fwDraft, donor: e.target.value })} />
-                      <select className={FIELD} aria-label="Area" value={fwDraft.area} onChange={(e) => setFwDraft({ ...fwDraft, area: e.target.value })}>
+                      <select className={FIELD} aria-label={LABELS.programme} value={fwDraft.area} onChange={(e) => setFwDraft({ ...fwDraft, area: e.target.value })}>
                         {myAreas.map((a) => (
                           <option key={a.slug} value={a.slug}>{a.name}</option>
                         ))}
                       </select>
+                    </div>
+                    <div className="mt-4">
+                      <DetailFields value={detailsDraft} onChange={setDetailsDraft} />
                     </div>
                     <div className="mt-4 flex gap-2">
                       <button type="button" onClick={saveFramework} disabled={busy} className={BTN}>Save changes</button>
@@ -230,18 +334,52 @@ function MEFrameworks() {
                         <dd className="mt-0.5 font-medium text-[#101828]">{fw.donor || "Not set"}</dd>
                       </div>
                       <div>
-                        <dt className="text-xs text-[#667085]">Area</dt>
+                        <dt className="text-xs text-[#667085]">{LABELS.programme}</dt>
                         <dd className="mt-0.5 font-medium text-[#101828]">{areaName(fw.area)}</dd>
                       </div>
                       <div>
                         <dt className="text-xs text-[#667085]">Indicators</dt>
                         <dd className="mt-0.5 font-medium text-[#101828]">{data.indicators.length}</dd>
                       </div>
+                      <div>
+                        <dt className="text-xs text-[#667085]">Dates</dt>
+                        <dd className="mt-0.5 font-medium text-[#101828]">{dates}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-[#667085]">Theme</dt>
+                        <dd className="mt-0.5 font-medium text-[#101828]">{themes || "Not set"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-[#667085]">Budget</dt>
+                        <dd className="mt-0.5 font-medium text-[#101828]">
+                          {fw.budget ? `${Number(fw.budget).toLocaleString()} ${fw.currency || ""}`.trim() : "Not set"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-[#667085]">Countries</dt>
+                        <dd className="mt-0.5 font-medium text-[#101828]">{countries || "Not set"}</dd>
+                      </div>
+                      {(fw.partner || fw.region) && (
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs text-[#667085]">Partner and region</dt>
+                          <dd className="mt-0.5 font-medium text-[#101828]">{[fw.partner, fw.region].filter(Boolean).join(", ")}</dd>
+                        </div>
+                      )}
+                      {fw.description && (
+                        <div className="sm:col-span-3">
+                          <dt className="text-xs text-[#667085]">Description</dt>
+                          <dd className="mt-0.5 text-[#475467]">{fw.description}</dd>
+                        </div>
+                      )}
                     </dl>
                     <div className="mt-4 flex flex-wrap gap-1.5">
                       {fw.periods.map((p) => (
                         <span key={p} className="rounded-full bg-[#EDE9FB] px-2.5 py-0.5 text-xs font-medium text-[#5B3FD0]">{p}</span>
                       ))}
+                    </div>
+
+                    <div className="mt-5 border-t border-[#EEF0F4] pt-4">
+                      <PeopleAccess frameworkId={selectedId} isAdmin={isAdmin} />
                     </div>
                   </>
                 )}
