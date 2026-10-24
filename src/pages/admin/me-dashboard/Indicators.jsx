@@ -11,17 +11,21 @@ const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "
 
 const EMPTY = {
   name: "", resultId: "", unit: "", baseline: "", targets: {}, mov: "", assumptions: "",
-  format: "Numeric", frequency: "", kpi: false,
+  format: "Numeric", frequency: "Quarterly", kpi: false,
 };
 
 const FORMATS = ["Numeric", "Percentage", "Qualitative only"];
+const STATUSES = ["Achieved", "On track", "Minor delays", "Off track", "No data yet", "No target"];
+const FREQUENCIES = ["Monthly", "Quarterly", "Biannual", "Annual"];
+
+const GRID = "grid grid-cols-[minmax(260px,3fr)_minmax(200px,2fr)_110px_130px_140px_120px] items-center gap-4";
 
 const SMALL =
-  "rounded-md border border-[#D0D5DD] bg-white px-2.5 py-1 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-md border border-[#D0D5DD] bg-white px-3 py-1.5 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00664E] disabled:cursor-not-allowed disabled:opacity-50";
 const SMALL_DANGER =
-  "rounded-md border border-[#FDA29B] bg-white px-2.5 py-1 text-xs font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-md border border-[#FDA29B] bg-white px-3 py-1.5 text-xs font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318] disabled:cursor-not-allowed disabled:opacity-50";
 
-/* Header band colours, cycled by result position (like TolaData's level colours) */
+/* Result group colours, cycled by position */
 const BANDS = [
   { bg: "#E9F6F1", bar: "#00664E", text: "#064E3B" },
   { bg: "#EEEBFB", bar: "#5B3FD0", text: "#3B2A8F" },
@@ -30,20 +34,20 @@ const BANDS = [
 ];
 
 const STATUS_STYLE = {
-  Achieved: "#067647",
-  "On track": "#067647",
-  "Minor delays": "#CA9A04",
-  "Off track": "#B42318",
+  Achieved: { dot: "#067647", bg: "#ECFDF3", text: "#067647" },
+  "On track": { dot: "#17B26A", bg: "#ECFDF3", text: "#067647" },
+  "Minor delays": { dot: "#CA9A04", bg: "#FEF6D8", text: "#7A5B00" },
+  "Off track": { dot: "#D92D20", bg: "#FEF3F2", text: "#B42318" },
+  "No data yet": { dot: "#98A2B3", bg: "#F2F4F7", text: "#475467" },
+  "No target": { dot: "#D0D5DD", bg: "#F9FAFB", text: "#667085" },
 };
 
 const formatOf = (ind) =>
   ind.format || (/%|percent/i.test(ind.unit || "") ? "Percentage" : "Numeric");
 
-/* Latest reported value for an indicator, and the target it is measured against.
-   Values look like { indicatorId, period, actual, status }. */
+/* Latest approved value for an indicator, and the target it is measured against. */
 function progressOf(ind, values, periods) {
   const idx = (v) => (periods || []).indexOf(v.period);
-  /* Only approved values count towards progress, as elsewhere in the portal */
   const mine = values
     .filter((v) => v.indicatorId === ind.id && v.status === "approved" && (v.actual ?? v.value) != null)
     .sort((a, b) => idx(a) - idx(b));
@@ -59,14 +63,56 @@ function progressOf(ind, values, periods) {
     : null;
   const actual = latest ? Number(latest.actual ?? latest.value) : null;
   const pct = actual != null && target ? Math.min(100, Math.round((actual / target) * 100)) : null;
-  const status = pct == null ? "" : pct >= 100 ? "Achieved" : pct >= 75 ? "On track" : pct >= 40 ? "Minor delays" : "Off track";
+  const status =
+    target == null ? "No target"
+    : pct == null ? "No data yet"
+    : pct >= 100 ? "Achieved"
+    : pct >= 75 ? "On track"
+    : pct >= 40 ? "Minor delays"
+    : "Off track";
   return { actual, target, pct, status, last: latest?.period || "", isPct };
+}
+
+function Field({ label, className = "", children }) {
+  return (
+    <label className={`flex flex-col gap-1.5 ${className}`}>
+      <span className="text-xs font-semibold text-[#344054]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function StatusPill({ status }) {
+  if (!status) return <span className="text-[#98A2B3]">-</span>;
+  const s = STATUS_STYLE[status];
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{ background: s.bg, color: s.text }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.dot }} />
+      {status}
+    </span>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return (
+    <div className={`${CARD} flex items-center gap-3 px-5 py-4`}>
+      <span className="h-9 w-1.5 rounded-full" style={{ background: color }} aria-hidden="true" />
+      <div>
+        <p className="text-2xl font-semibold leading-none text-[#101828]">{value}</p>
+        <p className="mt-1.5 text-xs font-medium text-[#667085]">{label}</p>
+      </div>
+    </div>
+  );
 }
 
 function MEIndicators() {
   const { isAdmin, frameworks, selectedId, setSelectedId, data, fw, ordered, busy, error, run, reload } = useMEData();
   const [query, setQuery] = useState("");
   const [resultFilter, setResultFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY);
@@ -82,13 +128,40 @@ function MEIndicators() {
 
   const canManage = Boolean(fw) && (isAdmin || access.departments.has(fw.area));
 
+  /* Results to choose from: framework order first, with fallbacks if it is empty */
+  const resultOptions = useMemo(() => {
+    const list = ordered?.length ? ordered : data?.results || fw?.results || [];
+    return list.map((r) => ({ id: r.id, title: r.title || r.name || r.statement || String(r.id) }));
+  }, [ordered, data, fw]);
+
+  /* Progress for every indicator, computed once */
+  const progress = useMemo(() => {
+    const map = new Map();
+    if (data && fw) data.indicators.forEach((i) => map.set(i.id, progressOf(i, data.values, fw.periods)));
+    return map;
+  }, [data, fw]);
+
+  const summary = useMemo(() => {
+    const all = data ? data.indicators : [];
+    const st = (i) => progress.get(i.id)?.status || "";
+    return {
+      total: all.length,
+      kpis: all.filter((i) => i.kpi).length,
+      good: all.filter((i) => st(i) === "Achieved" || st(i) === "On track").length,
+      attention: all.filter((i) => st(i) === "Minor delays" || st(i) === "Off track").length,
+    };
+  }, [data, progress]);
+
   const shown = useMemo(() => {
     if (!data) return [];
     const q = query.trim().toLowerCase();
     return data.indicators.filter(
-      (i) => (!resultFilter || i.resultId === resultFilter) && (!q || i.name.toLowerCase().includes(q))
+      (i) =>
+        (!resultFilter || i.resultId === resultFilter) &&
+        (!statusFilter || progress.get(i.id)?.status === statusFilter) &&
+        (!q || i.name.toLowerCase().includes(q))
     );
-  }, [data, query, resultFilter]);
+  }, [data, query, resultFilter, statusFilter, progress]);
 
   /* Indicators grouped under their result, in framework order, empty groups hidden */
   const groups = useMemo(
@@ -99,12 +172,22 @@ function MEIndicators() {
     [ordered, shown]
   );
 
+  const filtering = Boolean(query || resultFilter || statusFilter);
+  const clearFilters = () => {
+    setQuery("");
+    setResultFilter("");
+    setStatusFilter("");
+  };
+
   const toggleGroup = (id) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+
+  const allCollapsed = groups.length > 0 && groups.every((g) => collapsed.has(g.result.id));
+  const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(groups.map((g) => g.result.id)));
 
   const openAdd = () => {
     if (showForm && !editingId) {
@@ -133,7 +216,7 @@ function MEIndicators() {
       mov: ind.mov || "",
       assumptions: ind.assumptions || "",
       format: formatOf(ind),
-      frequency: ind.frequency || "",
+      frequency: ind.frequency || "Quarterly",
       kpi: Boolean(ind.kpi),
     });
     setShowForm(true);
@@ -183,7 +266,7 @@ function MEIndicators() {
 
   return (
     <Page>
-      <PageHead title="Indicators" subtitle={fw ? `${data.indicators.length} indicators in ${fw.name}, ${area}` : "Indicators, targets and how they are verified."}>
+      <PageHead title="Indicators" subtitle={fw ? `${fw.name}, ${area}` : ""}>
         <FrameworkSelect frameworks={frameworks} value={selectedId} onChange={setSelectedId} />
         {canManage && (
           <button type="button" onClick={openAdd} className={BTN}>
@@ -195,174 +278,248 @@ function MEIndicators() {
       <ErrorBar error={error} />
       {!fw && <NoFramework isAdmin={isAdmin} busy={busy} />}
 
+      {fw && data && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Stat label="Indicators" value={summary.total} color="#344054" />
+          <Stat label="KPIs" value={summary.kpis} color="#CA9A04" />
+          <Stat label="On track" value={summary.good} color="#17B26A" />
+          <Stat label="Needs attention" value={summary.attention} color="#D92D20" />
+        </div>
+      )}
+
       {fw && showForm && canManage && (
-        <section className={`${CARD} p-5`} aria-label={editingId ? "Edit indicator" : "Add indicator"}>
-          <CardHead
-            title={editingId ? "Edit indicator" : "Add an indicator"}
-            subtitle={
-              editingId
-                ? "Reported values and any strategic link are kept."
-                : "Targets are set per reporting period. Leave a period empty if nothing is expected."
-            }
-          />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <input className={`${FIELD} sm:col-span-2`} placeholder="Indicator name" aria-label="Indicator name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <select className={FIELD} aria-label="Result" value={form.resultId} onChange={(e) => setForm({ ...form, resultId: e.target.value })}>
-              <option value="">Choose a result</option>
-              {ordered.map((r) => (
-                <option key={r.id} value={r.id}>{r.title}</option>
-              ))}
-            </select>
-            <div className="grid grid-cols-2 gap-3">
-              <input className={FIELD} placeholder="Unit (%, people)" aria-label="Unit" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-              <input type="number" className={FIELD} placeholder="Baseline" aria-label="Baseline" value={form.baseline} onChange={(e) => setForm({ ...form, baseline: e.target.value })} />
+        <section className={`${CARD} p-6`} aria-label={editingId ? "Edit indicator" : "Add indicator"}>
+          <CardHead title={editingId ? "Edit indicator" : "Add indicator"} />
+
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Indicator name" className="sm:col-span-2">
+                <input className={FIELD} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </Field>
+              <Field label="Result">
+                <select
+                  className={`${FIELD} w-full`}
+                  value={form.resultId}
+                  onChange={(e) => setForm({ ...form, resultId: e.target.value })}
+                >
+                  <option value="">Choose a result</option>
+                  {resultOptions.map((r) => (
+                    <option key={r.id} value={r.id} style={{ color: "#101828", background: "#FFFFFF" }}>{r.title}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Format">
+                <select className={FIELD} value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}>
+                  {FORMATS.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Unit">
+                <input className={FIELD} value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
+              </Field>
+              <Field label="Baseline">
+                <input type="number" className={FIELD} value={form.baseline} onChange={(e) => setForm({ ...form, baseline: e.target.value })} />
+              </Field>
+              <Field label="Collection frequency">
+                <select className={FIELD} value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
+                  {[...new Set([...FREQUENCIES, form.frequency].filter(Boolean))].map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </Field>
+              <div className="flex items-end">
+                <label className="flex h-[42px] cursor-pointer items-center gap-2.5 rounded-lg border border-[#D0D5DD] bg-white px-3.5 text-sm font-medium text-[#344054] hover:bg-[#F9FAFB]">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-[#00664E]"
+                    checked={form.kpi}
+                    onChange={(e) => setForm({ ...form, kpi: e.target.checked })}
+                  />
+                  KPI
+                </label>
+              </div>
             </div>
-            <select className={FIELD} aria-label="Format" value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}>
-              {FORMATS.map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-            <input className={FIELD} placeholder="Collection frequency (Monthly)" aria-label="Collection frequency" value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })} />
-            <input className={FIELD} placeholder="Means of verification" aria-label="Means of verification" value={form.mov} onChange={(e) => setForm({ ...form, mov: e.target.value })} />
-            <input className={FIELD} placeholder="Assumptions" aria-label="Assumptions" value={form.assumptions} onChange={(e) => setForm({ ...form, assumptions: e.target.value })} />
-            <label className="flex items-center gap-2 text-sm text-[#344054]">
-              <input type="checkbox" checked={form.kpi} onChange={(e) => setForm({ ...form, kpi: e.target.checked })} />
-              Key performance indicator (KPI)
-            </label>
+
+            <div className="grid gap-4 border-t border-[#EAECF0] pt-6 sm:grid-cols-2">
+              <Field label="Means of verification">
+                <input className={FIELD} value={form.mov} onChange={(e) => setForm({ ...form, mov: e.target.value })} />
+              </Field>
+              <Field label="Assumptions">
+                <input className={FIELD} value={form.assumptions} onChange={(e) => setForm({ ...form, assumptions: e.target.value })} />
+              </Field>
+            </div>
+
+            <div className="border-t border-[#EAECF0] pt-6">
+              <p className="mb-3 text-xs font-semibold text-[#344054]">Quarterly targets</p>
+              <TargetsInput periods={fw.periods} value={form.targets} onChange={(targets) => setForm({ ...form, targets })} />
+            </div>
           </div>
-          <div className="mt-4">
-            <TargetsInput periods={fw.periods} value={form.targets} onChange={(targets) => setForm({ ...form, targets })} />
-          </div>
-          <div className="mt-4 flex gap-2">
+
+          <div className="mt-6 flex justify-end gap-2 border-t border-[#EAECF0] pt-4">
+            <button type="button" onClick={closeForm} className={BTN_LIGHT}>Cancel</button>
             <button type="button" onClick={saveIndicator} disabled={busy} className={BTN}>
               {editingId ? "Save changes" : "Add indicator"}
             </button>
-            <button type="button" onClick={closeForm} className={BTN_LIGHT}>{editingId ? "Cancel" : "Close"}</button>
           </div>
         </section>
       )}
 
       {fw && (
-        <section aria-label="Indicators" className={`${CARD} overflow-x-auto`}>
-          <div className="flex flex-wrap items-center gap-2 p-4">
-            <p className="mr-auto text-xs font-medium text-[#667085]">
-              {shown.length} {shown.length === 1 ? "indicator" : "indicators"} across {groups.length} {groups.length === 1 ? "group" : "groups"}
-            </p>
-            <input className={`${FIELD} w-64`} placeholder="Search indicators" aria-label="Search indicators" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <select className={FIELD} aria-label="Filter by result" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)}>
+        <section aria-label="Indicators" className={`${CARD} overflow-hidden`}>
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#EAECF0] p-4">
+            <input
+              type="search"
+              className={`${FIELD} w-full sm:w-64`}
+              aria-label="Search indicators"
+              placeholder="Search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <select className={`${FIELD} max-w-[260px]`} aria-label="Filter by result" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)}>
               <option value="">All results</option>
-              {ordered.map((r) => (
-                <option key={r.id} value={r.id}>{r.title}</option>
+              {resultOptions.map((r) => (
+                <option key={r.id} value={r.id} style={{ color: "#101828", background: "#FFFFFF" }}>{r.title}</option>
               ))}
             </select>
+            <select className={FIELD} aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            {filtering && (
+              <button type="button" onClick={clearFilters} className="text-xs font-semibold text-[#00664E] hover:underline">
+                Clear
+              </button>
+            )}
+            <button type="button" onClick={toggleAll} className={`${SMALL} ml-auto`} disabled={groups.length === 0}>
+              {allCollapsed ? "Expand all" : "Collapse all"}
+            </button>
           </div>
 
-          <div className="min-w-[900px] text-sm">
-            <div className="grid grid-cols-[minmax(240px,3fr)_minmax(180px,2fr)_1fr_1.2fr_1.2fr_auto] gap-3 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-xs font-medium text-[#667085]">
-              <span>Name</span>
-              <span>Actual vs target</span>
-              <span>Format</span>
-              <span>Collection frequency</span>
-              <span>Status</span>
-              <span className={canManage ? "w-[110px]" : "w-0"}>{canManage ? "Actions" : ""}</span>
-            </div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[960px] text-sm">
+              <div className={`${GRID} border-b border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-xs font-semibold text-[#667085]`}>
+                <span>Indicator</span>
+                <span>Progress vs quarterly targets</span>
+                <span>Format</span>
+                <span>Frequency</span>
+                <span>Status</span>
+                <span className="text-right">{canManage ? "Actions" : ""}</span>
+              </div>
 
-            {groups.length === 0 && (
-              <p className="px-5 py-10 text-center text-sm text-[#98A2B3]">No indicators match.</p>
-            )}
+              {groups.length === 0 && (
+                <p className="px-5 py-12 text-center text-sm text-[#98A2B3]">No indicators</p>
+              )}
 
-            {groups.map(({ result, band, items }) => {
-              const open = !collapsed.has(result.id);
-              return (
-                <div key={result.id}>
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(result.id)}
-                    aria-expanded={open}
-                    className="flex w-full items-center gap-2 border-l-4 px-4 py-2.5 text-left text-sm font-semibold"
-                    style={{ background: band.bg, borderLeftColor: band.bar, color: band.text }}
-                  >
-                    {result.title}
-                    <span className="rounded-full bg-white/70 px-2 text-xs font-medium">{items.length}</span>
-                    <span className="ml-auto text-xs" aria-hidden="true">{open ? "▲" : "▼"}</span>
-                  </button>
+              {groups.map(({ result, band, items }) => {
+                const open = !collapsed.has(result.id);
+                return (
+                  <div key={result.id} className="border-b border-[#EAECF0] last:border-b-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(result.id)}
+                      aria-expanded={open}
+                      className="flex w-full items-center gap-3 border-l-4 px-5 py-3 text-left text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00664E]"
+                      style={{ background: band.bg, borderLeftColor: band.bar, color: band.text }}
+                    >
+                      <svg
+                        width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"
+                        className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+                      >
+                        <path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span className="min-w-0 flex-1 truncate">{result.title}</span>
+                      <span className="rounded-full bg-white/80 px-2.5 py-0.5 text-xs font-semibold">{items.length}</span>
+                    </button>
 
-                  {open &&
-                    items.map((ind) => {
-                      const p = progressOf(ind, data.values, fw.periods);
-                      const suffix = p.isPct ? "%" : "";
-                      return (
-                        <div key={ind.id} className="grid grid-cols-[minmax(240px,3fr)_minmax(180px,2fr)_1fr_1.2fr_1.2fr_auto] items-center gap-3 border-t border-[#F2F4F7] px-5 py-3">
-                          <div className="flex items-start gap-2">
-                            <div>
-                              <p className="font-medium text-[#3B2A8F]">{ind.name}</p>
-                              {(ind.mov || ind.assumptions) && (
-                                <p className="mt-0.5 text-xs text-[#667085]">
-                                  {ind.mov ? `Verified by: ${ind.mov}` : ""}
-                                  {ind.mov && ind.assumptions ? " · " : ""}
-                                  {ind.assumptions ? `Assumes: ${ind.assumptions}` : ""}
-                                </p>
+                    {open &&
+                      items.map((ind) => {
+                        const p = progress.get(ind.id) || progressOf(ind, data.values, fw.periods);
+                        const suffix = p.isPct ? "%" : "";
+                        return (
+                          <div
+                            key={ind.id}
+                            className={`${GRID} border-t border-[#F2F4F7] px-5 py-4 transition-colors hover:bg-[#FCFCFD]`}
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="min-w-0 font-medium leading-snug text-[#101828]">{ind.name}</p>
+                              {ind.kpi && (
+                                <span
+                                  title="Key performance indicator"
+                                  className="shrink-0 rounded-md bg-[#FEF6D8] px-1.5 py-0.5 text-[11px] font-bold text-[#7A5B00]"
+                                >
+                                  KPI
+                                </span>
                               )}
                             </div>
-                            {ind.kpi && (
-                              <span title="Key performance indicator" className="ml-auto rounded-full bg-[#CA9A04] px-1.5 py-0.5 text-[10px] font-bold text-white">KPI</span>
-                            )}
-                          </div>
 
-                          <div>
-                            {p.actual == null && p.target == null ? (
-                              <span className="text-[#98A2B3]">-</span>
-                            ) : (
-                              <>
-                                <p className="text-xs font-medium text-[#344054]">
-                                  {p.actual ?? "-"}{suffix} <span className="text-[#98A2B3]">/ {p.target ?? "-"}{suffix}</span>
-                                </p>
-                                <div
-                                  className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[#EAECF0]"
-                                  role="progressbar"
-                                  aria-label={`Progress for ${ind.name}`}
-                                  aria-valuemin={0}
-                                  aria-valuemax={100}
-                                  aria-valuenow={p.pct ?? 0}
-                                >
-                                  <div className="h-full rounded-full" style={{ width: `${p.pct ?? 0}%`, background: band.bar }} />
-                                </div>
-                                {p.last && <p className="mt-0.5 text-[11px] text-[#98A2B3]">Last data update: {p.last}</p>}
-                              </>
-                            )}
-                          </div>
-
-                          <span className="text-[#475467]">{formatOf(ind)}</span>
-                          <span className="text-[#475467]">{ind.frequency || "-"}</span>
-                          <span className="flex items-center gap-1.5 text-[#475467]">
-                            {p.status ? (
-                              <>
-                                <span className="inline-block h-2 w-2 rounded-full" style={{ background: STATUS_STYLE[p.status] }} />
-                                {p.status}
-                              </>
-                            ) : (
-                              <span className="text-[#98A2B3]">-</span>
-                            )}
-                          </span>
-
-                          {canManage ? (
-                            <div className="flex w-[110px] gap-2">
-                              <button type="button" className={SMALL} disabled={busy} aria-label={`Edit ${ind.name}`} onClick={() => startEdit(ind)}>
-                                Edit
-                              </button>
-                              <button type="button" className={SMALL_DANGER} disabled={busy} aria-label={`Delete ${ind.name}`} onClick={() => deleteIndicator(ind)}>
-                                Delete
-                              </button>
+                            <div>
+                              {p.actual == null && p.target == null ? (
+                                <span className="text-[#98A2B3]">-</span>
+                              ) : (
+                                <>
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <p className="text-sm font-semibold text-[#101828]">
+                                      {p.actual ?? "-"}{suffix}
+                                      <span className="font-normal text-[#98A2B3]"> / {p.target ?? "-"}{suffix}</span>
+                                    </p>
+                                    {p.pct != null && <span className="text-xs font-semibold text-[#475467]">{p.pct}%</span>}
+                                  </div>
+                                  <div
+                                    className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[#EAECF0]"
+                                    role="progressbar"
+                                    aria-label={`Progress for ${ind.name}`}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-valuenow={p.pct ?? 0}
+                                  >
+                                    <div
+                                      className="h-full rounded-full transition-[width]"
+                                      style={{ width: `${p.pct ?? 0}%`, background: band.bar }}
+                                    />
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {(fw.periods || [])
+                                      .filter((q) => ind.targets?.[q] !== undefined && ind.targets[q] !== "")
+                                      .map((q) => (
+                                        <span
+                                          key={q}
+                                          title={`${q} target`}
+                                          className="rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]"
+                                        >
+                                          {q.replace(/^\d{4}-/, "")}: {ind.targets[q]}{suffix}
+                                        </span>
+                                      ))}
+                                  </div>
+                                </>
+                              )}
                             </div>
-                          ) : (
-                            <span />
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-              );
-            })}
+
+                            <span className="text-[#475467]">{formatOf(ind)}</span>
+                            <span className="text-[#475467]">{ind.frequency || "Quarterly"}</span>
+                            <span><StatusPill status={p.status} /></span>
+
+                            {canManage ? (
+                              <div className="flex justify-end gap-2">
+                                <button type="button" className={SMALL} disabled={busy} aria-label={`Edit ${ind.name}`} onClick={() => startEdit(ind)}>
+                                  Edit
+                                </button>
+                                <button type="button" className={SMALL_DANGER} disabled={busy} aria-label={`Delete ${ind.name}`} onClick={() => deleteIndicator(ind)}>
+                                  Delete
+                                </button>
+                              </div>
+                            ) : (
+                              <span />
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </section>
       )}

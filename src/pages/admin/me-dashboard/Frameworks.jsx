@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DEPARTMENT_AREAS, PROGRAM_AREAS, getAccess } from "../../../access";
 import { api } from "../../../meApi";
 import { LABELS } from "../../../labels";
@@ -17,6 +17,8 @@ const SMALL =
   "rounded-md border border-[#D0D5DD] bg-white px-2.5 py-1 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-50";
 const SMALL_DANGER =
   "rounded-md border border-[#FDA29B] bg-white px-2.5 py-1 text-xs font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] disabled:cursor-not-allowed disabled:opacity-50";
+const SMALL_GREEN =
+  "rounded-md border border-[#B7E4D4] bg-[#F0FAF6] px-2.5 py-1 text-xs font-semibold text-[#00664E] transition hover:bg-[#E0F4EC] disabled:cursor-not-allowed disabled:opacity-50";
 
 const fmtNum = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 
@@ -106,6 +108,8 @@ function MEFrameworks() {
   const [form, setForm] = useState({ name: "", donor: "", area: AREAS[0]?.slug || "", periods: "2026-Q1, 2026-Q2, 2026-Q3, 2026-Q4" });
   const [newDetails, setNewDetails] = useState(EMPTY_DETAILS);
   const [rf, setRf] = useState({ title: "", level: 0, parentId: "" });
+  const [showAddResult, setShowAddResult] = useState(false);
+  const addRef = useRef(null);
   const [editingFw, setEditingFw] = useState(false);
   const [fwDraft, setFwDraft] = useState({ name: "", donor: "", area: "" });
   const [detailsDraft, setDetailsDraft] = useState(EMPTY_DETAILS);
@@ -129,6 +133,10 @@ function MEFrameworks() {
 
   const levels = fw?.levels?.length ? fw.levels : DEFAULT_LEVELS;
   const parents = ordered.filter((r) => r.level === Number(rf.level) - 1);
+
+  /* The add form is always open while a framework has no results, so the first step is obvious */
+  const resultsEmpty = ordered.length === 0;
+  const addFormOpen = canManage && (showAddResult || resultsEmpty);
 
   const createFramework = () =>
     run(async () => {
@@ -197,6 +205,22 @@ function MEFrameworks() {
       setRf({ title: "", level: rf.level, parentId: rf.parentId });
       await reload();
     });
+
+  /* Opens the form already set to the next level down, under the chosen result */
+  const openAddUnder = (r) => {
+    setRf({ title: "", level: r.level + 1, parentId: r.id });
+    setShowAddResult(true);
+    setTimeout(() => addRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  };
+
+  const toggleAddResult = () => {
+    if (showAddResult) {
+      setShowAddResult(false);
+      return;
+    }
+    setRf({ title: "", level: 0, parentId: "" });
+    setShowAddResult(true);
+  };
 
   const saveResult = (r) =>
     run(async () => {
@@ -277,6 +301,8 @@ function MEFrameworks() {
                         setSelectedId(f.id);
                         setEditingFw(false);
                         setEditingResult(null);
+                        setShowAddResult(false);
+                        setRf({ title: "", level: 0, parentId: "" });
                       }}
                       aria-current={active ? "true" : undefined}
                       className={`w-full rounded-lg px-3 py-2 text-left text-[13px] transition ${
@@ -385,10 +411,69 @@ function MEFrameworks() {
                 )}
               </section>
 
+              {/* Results, with the add form built in */}
               <section className={`${CARD} p-5`} aria-label="Results">
-                <CardHead title="Results" subtitle="Impact, outcomes and outputs. Each result can hold indicators. A result can only be deleted once nothing sits under it." />
-                {ordered.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet. Add the impact first.</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <CardHead title="Results" subtitle="Impact, outcomes and outputs. Each result can hold indicators. A result can only be deleted once nothing sits under it." />
+                  </div>
+                  {canManage && !resultsEmpty && (
+                    <button type="button" onClick={toggleAddResult} className={`${BTN} shrink-0`}>
+                      {showAddResult ? "Close" : "Add result"}
+                    </button>
+                  )}
+                </div>
+
+                {addFormOpen && (
+                  <div ref={addRef} className="mb-4 rounded-lg border border-[#DDD6F7] bg-[#F8F7FE] p-4" aria-label="Add result">
+                    <p className="mb-3 text-sm font-semibold text-[#3B2A8F]">
+                      {resultsEmpty ? "Start with the impact" : "New result"}
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Title" wide>
+                        <input
+                          className={`${FIELD} w-full`}
+                          value={rf.title}
+                          onChange={(e) => setRf({ ...rf, title: e.target.value })}
+                          onKeyDown={(e) => e.key === "Enter" && !busy && addResult()}
+                        />
+                      </Field>
+                      <Field label="Level">
+                        <select
+                          className={`${FIELD} w-full`}
+                          value={rf.level}
+                          onChange={(e) => setRf({ ...rf, level: Number(e.target.value), parentId: "" })}
+                        >
+                          {levels.map((name, i) => (
+                            <option key={name} value={i} disabled={resultsEmpty && i > 0}>{name}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Sits under">
+                        <select
+                          className={`${FIELD} w-full`}
+                          value={rf.parentId}
+                          disabled={Number(rf.level) === 0}
+                          onChange={(e) => setRf({ ...rf, parentId: e.target.value })}
+                        >
+                          <option value="">{Number(rf.level) === 0 ? "Not needed" : "Choose a result"}</option>
+                          {parents.map((p) => (
+                            <option key={p.id} value={p.id}>{p.title}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                    <div className="mt-4 flex gap-2">
+                      <button type="button" onClick={addResult} disabled={busy} className={BTN}>Add result</button>
+                      {!resultsEmpty && (
+                        <button type="button" onClick={() => setShowAddResult(false)} className={BTN_LIGHT}>Close</button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {resultsEmpty ? (
+                  !canManage && <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet.</p>
                 ) : (
                   <ul className="space-y-1.5">
                     {ordered.map((r) => (
@@ -422,6 +507,17 @@ function MEFrameworks() {
                               </>
                             ) : (
                               <>
+                                {r.level + 1 < levels.length && (
+                                  <button
+                                    type="button"
+                                    className={SMALL_GREEN}
+                                    disabled={busy}
+                                    aria-label={`Add ${(levels[r.level + 1] || "result").toLowerCase()} under ${r.title}`}
+                                    onClick={() => openAddUnder(r)}
+                                  >
+                                    + {levels[r.level + 1]}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className={SMALL}
@@ -510,27 +606,6 @@ function MEFrameworks() {
                   </div>
                 )}
               </section>
-
-              {canManage && (
-                <section className={`${CARD} p-5`} aria-label="Add result">
-                  <CardHead title="Add a result" subtitle="Outcomes and outputs sit under a result one level up." />
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <input className={`${FIELD} sm:col-span-2`} placeholder="Result title" aria-label="Result title" value={rf.title} onChange={(e) => setRf({ ...rf, title: e.target.value })} />
-                    <select className={FIELD} aria-label="Level" value={rf.level} onChange={(e) => setRf({ ...rf, level: Number(e.target.value), parentId: "" })}>
-                      {levels.map((name, i) => (
-                        <option key={name} value={i}>{name}</option>
-                      ))}
-                    </select>
-                    <select className={FIELD} aria-label="Parent result" value={rf.parentId} disabled={Number(rf.level) === 0} onChange={(e) => setRf({ ...rf, parentId: e.target.value })}>
-                      <option value="">{Number(rf.level) === 0 ? "No parent needed" : "Choose parent result"}</option>
-                      {parents.map((p) => (
-                        <option key={p.id} value={p.id}>{p.title}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <button type="button" onClick={addResult} disabled={busy} className={`${BTN} mt-4`}>Add result</button>
-                </section>
-              )}
             </div>
           )}
         </div>
