@@ -20,7 +20,73 @@ const SMALL_DANGER =
 const SMALL_GREEN =
   "rounded-md border border-[#B7E4D4] bg-[#F0FAF6] px-2.5 py-1 text-xs font-semibold text-[#00664E] transition hover:bg-[#E0F4EC] disabled:cursor-not-allowed disabled:opacity-50";
 
-const fmtNum = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
+const fmtNum = (n) => {
+  if (n === undefined || n === null || n === "") return "-";
+  const value = Number(n);
+  return Number.isFinite(value) ? value.toLocaleString() : "-";
+};
+
+const quarterForDate = (date) => {
+  if (!date) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, quarter: Math.floor((month - 1) / 3) + 1 };
+};
+
+const quarterLabel = ({ year, quarter }) => `${year}-Q${quarter}`;
+
+/* Generates every calendar quarter touched by the framework dates, inclusive. */
+function generateQuarterPeriods(startDate, endDate) {
+  const start = quarterForDate(startDate);
+  const end = quarterForDate(endDate);
+  if (!start || !end) return [];
+  const startIndex = start.year * 4 + start.quarter - 1;
+  const endIndex = end.year * 4 + end.quarter - 1;
+  if (endIndex < startIndex) return [];
+  const periods = [];
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    periods.push(quarterLabel({ year: Math.floor(index / 4), quarter: (index % 4) + 1 }));
+  }
+  return periods;
+}
+
+function parsePeriods(raw) {
+  const periods = String(raw || "").split(",").map((period) => period.trim()).filter(Boolean);
+  const seen = new Set();
+  const duplicates = [];
+  periods.forEach((period) => {
+    const key = period.toLocaleLowerCase();
+    if (seen.has(key)) duplicates.push(period);
+    seen.add(key);
+  });
+  return { periods, duplicates };
+}
+
+function periodProblem(raw) {
+  const { periods, duplicates } = parsePeriods(raw);
+  if (!periods.length) return "Add at least one reporting period.";
+  if (duplicates.length) return `Remove duplicate reporting period${duplicates.length > 1 ? "s" : ""}: ${[...new Set(duplicates)].join(", ")}.`;
+  return "";
+}
+
+/* Only quarter labels can be compared automatically with framework dates. */
+function periodsOutsideDates(periods, startDate, endDate) {
+  const start = quarterForDate(startDate);
+  const end = quarterForDate(endDate);
+  if (!start && !end) return [];
+  return periods.filter((period) => {
+    const match = /^(\d{4})-Q([1-4])$/i.exec(period);
+    if (!match) return false;
+    const value = { year: Number(match[1]), quarter: Number(match[2]) };
+    const index = value.year * 4 + value.quarter - 1;
+    const startIndex = start ? start.year * 4 + start.quarter - 1 : -Infinity;
+    const endIndex = end ? end.year * 4 + end.quarter - 1 : Infinity;
+    return index < startIndex || index > endIndex;
+  });
+}
 
 const fmtDay = (s) => {
   const t = s ? new Date(s).getTime() : NaN;
@@ -105,7 +171,15 @@ function DetailFields({ value, onChange }) {
 function MEFrameworks() {
   const { isAdmin, frameworks, selectedId, setSelectedId, data, fw, ordered, busy, error, run, loadList, reload } = useMEData();
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ name: "", donor: "", area: AREAS[0]?.slug || "", periods: "2026-Q1, 2026-Q2, 2026-Q3, 2026-Q4" });
+  const [form, setForm] = useState(() => {
+    const now = new Date();
+    const current = { year: now.getFullYear(), quarter: Math.floor(now.getMonth() / 3) + 1 };
+    const defaults = Array.from({ length: 4 }, (_, offset) => {
+      const index = current.year * 4 + current.quarter - 1 + offset;
+      return quarterLabel({ year: Math.floor(index / 4), quarter: (index % 4) + 1 });
+    });
+    return { name: "", donor: "", area: AREAS[0]?.slug || "", periods: defaults.join(", ") };
+  });
   const [newDetails, setNewDetails] = useState(EMPTY_DETAILS);
   const [rf, setRf] = useState({ title: "", level: 0, parentId: "" });
   const [showAddResult, setShowAddResult] = useState(false);
@@ -140,9 +214,10 @@ function MEFrameworks() {
 
   const createFramework = () =>
     run(async () => {
-      const periods = form.periods.split(",").map((p) => p.trim()).filter(Boolean);
+      const { periods } = parsePeriods(form.periods);
       if (!form.name.trim()) throw new Error("Give the framework a name.");
-      if (periods.length === 0) throw new Error("Add at least one reporting period.");
+      const periodsIssue = periodProblem(form.periods);
+      if (periodsIssue) throw new Error(periodsIssue);
       const problem = detailsProblem(newDetails);
       if (problem) throw new Error(problem);
       const { id } = await api("/me/frameworks", {
@@ -197,7 +272,14 @@ function MEFrameworks() {
   const addResult = () =>
     run(async () => {
       if (!rf.title.trim()) throw new Error("Give the result a title.");
-      if (Number(rf.level) > 0 && !rf.parentId) throw new Error("Choose the result this sits under.");
+      const level = Number(rf.level);
+      if (!Number.isInteger(level) || level < 0 || level >= levels.length) throw new Error("Choose a valid result level.");
+      if (level === 0 && rf.parentId) throw new Error("An impact-level result cannot sit under another result.");
+      if (level > 0 && !rf.parentId) throw new Error(`Choose the ${levels[level - 1]?.toLowerCase() || "parent result"} this sits under.`);
+      if (level > 0) {
+        const parent = ordered.find((result) => String(result.id) === String(rf.parentId));
+        if (!parent || parent.level !== level - 1) throw new Error(`Choose a valid ${levels[level - 1]?.toLowerCase() || "parent result"}.`);
+      }
       await api(`/me/frameworks/${selectedId}/results`, {
         method: "POST",
         body: { title: rf.title.trim(), level: Number(rf.level), ...(rf.parentId ? { parentId: rf.parentId } : {}) },
@@ -272,10 +354,32 @@ function MEFrameworks() {
                 <option key={a.slug} value={a.slug}>{a.name}</option>
               ))}
             </select>
-            <input className={FIELD} placeholder="Periods" aria-label="Periods" value={form.periods} onChange={(e) => setForm({ ...form, periods: e.target.value })} />
+            <div>
+              <label className="block text-xs font-medium text-[#667085]" htmlFor="new-framework-periods">Reporting periods (comma separated)</label>
+              <input id="new-framework-periods" className={`${FIELD} mt-1 w-full`} placeholder="2026-Q4, 2027-Q1" aria-label="Reporting periods" value={form.periods} onChange={(e) => setForm({ ...form, periods: e.target.value })} />
+              <p className="mt-1 text-[11px] text-[#667085]">Use quarter labels such as 2026-Q4. Custom labels are also allowed. Avoid duplicates.</p>
+            </div>
           </div>
           <div className="mt-4">
             <DetailFields value={newDetails} onChange={setNewDetails} />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className={BTN_LIGHT}
+                onClick={() => {
+                  const generated = generateQuarterPeriods(newDetails.startDate, newDetails.endDate);
+                  if (generated.length) setForm((current) => ({ ...current, periods: generated.join(", ") }));
+                }}
+                disabled={!newDetails.startDate || !newDetails.endDate || newDetails.endDate < newDetails.startDate}
+              >
+                Generate quarters from dates
+              </button>
+              <span className="text-xs text-[#667085]">Creates every calendar quarter touched by the start and end dates.</span>
+            </div>
+            {periodProblem(form.periods) && <p role="alert" className="mt-2 text-xs text-[#B42318]">{periodProblem(form.periods)}</p>}
+            {periodsOutsideDates(parsePeriods(form.periods).periods, newDetails.startDate, newDetails.endDate).length > 0 && (
+              <p role="status" className="mt-2 text-xs text-[#9A6700]">Some quarter periods fall outside the framework dates: {periodsOutsideDates(parsePeriods(form.periods).periods, newDetails.startDate, newDetails.endDate).join(", ")}. Review the dates or reporting periods before creating the framework.</p>
+            )}
           </div>
           <div className="mt-4 flex gap-2">
             <button type="button" onClick={createFramework} disabled={busy} className={BTN}>Create framework</button>
@@ -415,7 +519,7 @@ function MEFrameworks() {
               <section className={`${CARD} p-5`} aria-label="Results">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <CardHead title="Results" subtitle="Impact, outcomes and outputs. Each result can hold indicators. A result can only be deleted once nothing sits under it." />
+                    <CardHead title="Results hierarchy" subtitle="Build the results chain from impact → outcome → output. Add an impact first, then link each outcome to an impact and each output to an outcome. Indicators should measure the result they are linked to. A result can only be deleted once nothing sits under it." />
                   </div>
                   {canManage && !resultsEmpty && (
                     <button type="button" onClick={toggleAddResult} className={`${BTN} shrink-0`}>
@@ -449,14 +553,14 @@ function MEFrameworks() {
                           ))}
                         </select>
                       </Field>
-                      <Field label="Sits under">
+                      <Field label={Number(rf.level) === 0 ? "Parent result (not required for impact)" : `Parent ${levels[Number(rf.level) - 1] || "result"} (required)`}>
                         <select
                           className={`${FIELD} w-full`}
                           value={rf.parentId}
                           disabled={Number(rf.level) === 0}
                           onChange={(e) => setRf({ ...rf, parentId: e.target.value })}
                         >
-                          <option value="">{Number(rf.level) === 0 ? "Not needed" : "Choose a result"}</option>
+                          <option value="">{Number(rf.level) === 0 ? "Not needed for impact" : `Choose a ${levels[Number(rf.level) - 1]?.toLowerCase() || "parent result"}`}</option>
                           {parents.map((p) => (
                             <option key={p.id} value={p.id}>{p.title}</option>
                           ))}
@@ -472,6 +576,19 @@ function MEFrameworks() {
                   </div>
                 )}
 
+                {!resultsEmpty && (
+                  <div className="mb-3 flex flex-wrap gap-2 text-xs">
+                    {levels.map((levelName, index) => {
+                      const count = ordered.filter((result) => result.level === index).length;
+                      return (
+                        <span key={levelName} className="rounded-full bg-[#F4F5F7] px-2.5 py-1 text-[#475467]">
+                          {levelName}: <strong>{count}</strong>
+                        </span>
+                      );
+                    })}
+                    <span className="rounded-full bg-[#F0FAF6] px-2.5 py-1 text-[#00664E]">Indicators linked: <strong>{data.indicators.length}</strong></span>
+                  </div>
+                )}
                 {resultsEmpty ? (
                   !canManage && <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet.</p>
                 ) : (
@@ -561,15 +678,22 @@ function MEFrameworks() {
                           <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3">Indicator</th>
                           <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Baseline</th>
                           <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Target by period</th>
-                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-right">Total</th>
+                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-right">Target total</th>
                         </tr>
                       </thead>
                       <tbody>
                         {indicatorRows.map(({ r, i }) => {
-                          const targets = i.targets || {};
-                          const total = Object.values(targets).reduce((sum, v) => sum + Number(v || 0), 0);
+                          const targets = i.targets && typeof i.targets === "object" ? i.targets : {};
+                          const periodTargets = (fw.periods || []).map((period) => ({
+                            period,
+                            value: targets[period],
+                            set: targets[period] !== undefined && targets[period] !== null && targets[period] !== "" && Number.isFinite(Number(targets[period])),
+                          }));
+                          const setTargets = periodTargets.filter((target) => target.set);
+                          const total = setTargets.reduce((sum, target) => sum + Number(target.value), 0);
                           const isPercent = i.unit === "%";
-                          const hasTargets = Object.keys(targets).length > 0;
+                          const hasTargets = setTargets.length > 0;
+                          const missingTargets = periodTargets.length - setTargets.length;
                           return (
                             <tr key={i.id} className="border-t border-[#F2F4F7] align-top">
                               <td className="px-5 py-3">
@@ -581,22 +705,19 @@ function MEFrameworks() {
                               </td>
                               <td className="px-3 py-3 text-right tabular-nums text-[#475467]">{fmtNum(i.baseline)}</td>
                               <td className="px-3 py-3">
-                                {hasTargets ? (
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {fw.periods
-                                      .filter((p) => targets[p] !== undefined)
-                                      .map((p) => (
-                                        <span key={p} className="rounded-full bg-[#EDE9FB] px-2.5 py-0.5 text-xs font-medium text-[#5B3FD0]">
-                                          {p}: {fmtNum(targets[p])}
-                                        </span>
-                                      ))}
-                                  </div>
-                                ) : (
-                                  <span className="rounded-full bg-[#FBF3D0] px-2.5 py-0.5 text-xs font-medium text-[#7A5C00]">To be set</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {periodTargets.map(({ period, value, set }) => (
+                                    <span key={period} className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${set ? "bg-[#EDE9FB] text-[#5B3FD0]" : "bg-[#FBF3D0] text-[#7A5C00]"}`}>
+                                      {period}: {set ? fmtNum(value) : "Not set"}
+                                    </span>
+                                  ))}
+                                </div>
+                                {missingTargets > 0 && (
+                                  <p className="mt-1.5 text-[11px] text-[#9A6700]">{missingTargets} of {periodTargets.length} period {missingTargets === 1 ? "target is" : "targets are"} still missing.</p>
                                 )}
                               </td>
                               <td className="px-5 py-3 text-right font-semibold tabular-nums text-[#101828]">
-                                {hasTargets && !isPercent ? fmtNum(total) : "-"}
+                                {hasTargets && !isPercent ? fmtNum(total) : isPercent && hasTargets ? "Not additive" : "-"}
                               </td>
                             </tr>
                           );

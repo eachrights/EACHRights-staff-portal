@@ -58,6 +58,10 @@ const SAMPLE = {
 const progressOf = (pct) => (pct === null ? "none" : pct >= 90 ? "on" : pct >= 50 ? "risk" : "off");
 const fmt = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 
+/* Recognise a configured gender/sex disaggregation without assuming its ID or categories */
+const isGenderType = (type) =>
+  /\b(gender|sex)\b/i.test([type?.name, type?.slug, type?.code, type?.key].filter(Boolean).join(" "));
+
 function orderResults(results) {
   const children = new Map();
   for (const r of results) {
@@ -352,10 +356,26 @@ function MEDashboard() {
   const [notice, setNotice] = useState("");
   const [view, setView] = useState("project");
   const [strategic, setStrategic] = useState([]);
+  const [types, setTypes] = useState([]);
 
   useEffect(() => {
     let mounted = true;
     getAccess().then((r) => mounted && setAccess(r)).catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  /* Disaggregation types, gender first, so breakdowns can be shown with their category order */
+  useEffect(() => {
+    let mounted = true;
+    api("/me/disaggregations")
+      .then((r) => {
+        if (!mounted) return;
+        const configured = r.disaggregations || [];
+        setTypes([...configured.filter(isGenderType), ...configured.filter((t) => !isGenderType(t))]);
+      })
+      .catch(() => {});
     return () => {
       mounted = false;
     };
@@ -529,13 +549,25 @@ function MEDashboard() {
   const setDraft = (ind, saved, patch) =>
     setDrafts((cur) => ({ ...cur, [ind.id]: { ...draftFor(ind, saved), ...patch } }));
 
+  /* A save replaces the whole value, so the breakdown and evidence already on it are sent back unchanged */
   const submitValue = (ind, saved) =>
     run(async () => {
       const draft = draftFor(ind, saved);
       if (draft.actual === "") throw new Error("Enter the actual value first.");
+      const hasBreakdown = Object.keys(saved?.breakdown || {}).length > 0;
+      if (hasBreakdown && Number(draft.actual) !== Number(saved.actual)) {
+        throw new Error("This value has a breakdown that adds up to its total. Change it on the Forms page so the breakdown is updated too.");
+      }
       await api(`/me/frameworks/${selectedId}/values`, {
         method: "PUT",
-        body: { indicatorId: ind.id, period, actual: draft.actual, comment: draft.comment },
+        body: {
+          indicatorId: ind.id,
+          period,
+          actual: draft.actual,
+          comment: draft.comment,
+          ...(hasBreakdown ? { breakdown: saved.breakdown } : {}),
+          ...((saved?.evidence || []).length ? { evidence: saved.evidence } : {}),
+        },
       });
       setDrafts((cur) => {
         const { [ind.id]: _gone, ...rest } = cur;
@@ -561,6 +593,40 @@ function MEDashboard() {
       });
       await loadFramework(selectedId);
     }, "Strategic link updated.");
+
+  /* A reported value's breakdowns as readable lines, in the order the types and categories are set up */
+  const breakdownLines = (saved) =>
+    types
+      .filter((t) => saved?.breakdown?.[t.id])
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        parts: t.categories
+          .filter((c) => saved.breakdown[t.id][c] !== undefined)
+          .map((c) => ({ label: c, value: saved.breakdown[t.id][c] })),
+      }));
+
+  /* Files open through a short-lived private link; links open directly */
+  const openEvidence = (item) =>
+    run(async () => {
+      if (item.type === "link") {
+        window.open(item.url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const tab = window.open("about:blank", "_blank");
+      try {
+        const { url } = await api(`/me/frameworks/${selectedId}/evidence/download-url?key=${encodeURIComponent(item.key)}`);
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = url;
+        } else {
+          window.location.assign(url);
+        }
+      } catch (err) {
+        tab?.close();
+        throw err;
+      }
+    });
 
   const exportFile = (format) =>
     run(() =>
@@ -913,7 +979,13 @@ function MEDashboard() {
                   {shownRows.map(({ ind, result, saved, target, pct, progress }) => {
                     const draft = draftFor(ind, saved);
                     const locked = saved?.status === "approved";
-                    const review = REVIEW[saved?.status] ?? REVIEW.none;
+                    const correction = saved?.status === "submitted" ? saved.correction : null;
+                    const review = correction
+                      ? { label: "Correction awaiting approval", cls: "bg-[#FBF3D0] text-[#7A5C00]" }
+                      : REVIEW[saved?.status] ?? REVIEW.none;
+                    const lines = breakdownLines(saved);
+                    const evidence = saved?.evidence || [];
+                    const hasBreakdown = lines.length > 0;
 
                     return (
                       <tr key={ind.id} className="border-t border-[#F2F4F7] align-top transition hover:bg-[#FAFAFC]">
@@ -953,7 +1025,7 @@ function MEDashboard() {
                               aria-label={`Actual for ${ind.name}`}
                               value={draft.actual}
                               onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
-                              disabled={!canEnter || locked || busy}
+                              disabled={!canEnter || locked || busy || hasBreakdown}
                               className={`${FIELD} w-32 tabular-nums`}
                             />
                             <input
@@ -966,6 +1038,60 @@ function MEDashboard() {
                               className={`${FIELD} w-52`}
                             />
                           </div>
+
+                          {correction && (
+                            <div className="mt-3 rounded-lg border border-[#F3D18A] bg-[#FFFAEB] p-3 text-xs text-[#7A5C00]">
+                              <p className="font-semibold">
+                                Correction by {correction.requestedBy || "staff"}. Was {fmt(correction.previous?.actual)}, now {fmt(saved.actual)}.
+                              </p>
+                              <p className="mt-1 text-[#5C4600]">{correction.note}</p>
+                            </div>
+                          )}
+
+                          {saved && (
+                            <div className="mt-3 space-y-2.5 text-xs">
+                              {hasBreakdown && (
+                                <div className="space-y-1">
+                                  {lines.map((line) => (
+                                    <p key={line.id} className="leading-5 text-[#475467]">
+                                      <span className="font-semibold text-[#344054]">{line.name}:</span>{" "}
+                                      {line.parts.map((p, i) => (
+                                        <span key={p.label}>
+                                          {i > 0 ? " · " : ""}
+                                          {p.label} <span className="font-semibold tabular-nums text-[#101828]">{fmt(p.value)}</span>
+                                        </span>
+                                      ))}
+                                    </p>
+                                  ))}
+                                  <p className="text-[11px] text-[#98A2B3]">The total comes from the breakdown. Edit it on the Forms page.</p>
+                                </div>
+                              )}
+
+                              {evidence.length > 0 ? (
+                                <ul className="space-y-1">
+                                  {evidence.map((item, i) => (
+                                    <li key={`${item.type}-${item.key || item.url}-${i}`} className="flex items-center gap-2">
+                                      <span className="rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]">
+                                        {item.type === "file" ? "File" : "Link"}
+                                      </span>
+                                      <span className="min-w-0 max-w-[10rem] truncate text-[#101828]" title={item.name}>{item.name}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEvidence(item)}
+                                        disabled={busy}
+                                        aria-label={`Open ${item.name}`}
+                                        className={`font-medium text-[#5B3FD0] hover:underline ${FOCUS}`}
+                                      >
+                                        Open
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                saved.status === "submitted" && <p className="text-[#B54708]">No evidence attached. It cannot be approved without evidence.</p>
+                              )}
+                            </div>
+                          )}
                         </td>
 
                         <td className="px-3 py-4">
@@ -998,7 +1124,13 @@ function MEDashboard() {
                             )}
                             {isAdmin && saved?.status === "submitted" && (
                               <>
-                                <button type="button" onClick={() => reviewValue(ind, true)} disabled={busy} className={BTN_SM}>
+                                <button
+                                  type="button"
+                                  onClick={() => reviewValue(ind, true)}
+                                  disabled={busy || evidence.length === 0}
+                                  title={evidence.length === 0 ? "Evidence is required before a value can be approved" : undefined}
+                                  className={BTN_SM}
+                                >
                                   Approve
                                 </button>
                                 <button type="button" onClick={() => reviewValue(ind, false)} disabled={busy} className={BTN_SM_LIGHT}>

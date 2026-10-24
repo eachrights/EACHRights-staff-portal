@@ -7,9 +7,17 @@ import {
 /* One data-collection form per reporting period: every indicator with a target, in one place.
    Each indicator can also be broken down (by sex, age group and so on) using the
    disaggregation types the administrator has set up, and can carry evidence
-   (uploaded files and links) that backs up the reported value. */
+   (uploaded files and links) that backs up the reported value.
+   An approved value is locked, but it can be corrected: the correction needs a note for the
+   administrator, and goes back to "awaiting approval". */
 
 const isEmpty = (v) => v === "" || v === undefined || v === null;
+
+/* Recognise a configured gender/sex disaggregation without assuming its ID or categories. */
+const isGenderType = (type) =>
+  /\b(gender|sex)\b/i.test(
+    [type?.name, type?.slug, type?.code, type?.key].filter(Boolean).join(" ")
+  );
 
 const SMALL =
   "rounded-md border border-[#D0D5DD] bg-white px-2.5 py-1 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-50";
@@ -33,6 +41,14 @@ const contentTypeOf = (file) => {
   const ext = file.name.split(".").pop().toLowerCase();
   return FILE_TYPES[ext] || "";
 };
+
+/* The total of the numbers filled in for one breakdown type */
+const sumOf = (cats, type) =>
+  type.categories.filter((c) => !isEmpty(cats?.[c])).reduce((s, c) => s + Number(cats[c]), 0);
+
+/* The breakdown that drives the actual value: the first type (gender first) with any number in it */
+const driverType = (breakdown, types) =>
+  types.find((t) => t.categories.some((c) => !isEmpty(breakdown?.[t.id]?.[c])));
 
 /* Each type that has any numbers must add up to the actual value (the API checks this too) */
 function breakdownProblem(draft, types) {
@@ -65,26 +81,45 @@ function MEForms() {
   const [open, setOpen] = useState({});
   const [evOpen, setEvOpen] = useState({});
   const [links, setLinks] = useState({});
+  const [correcting, setCorrecting] = useState({});
   const [uploading, setUploading] = useState(null);
   const [types, setTypes] = useState([]);
+  const [typesVersion, setTypesVersion] = useState(0);
+  const [setupCats, setSetupCats] = useState("");
 
   useEffect(() => {
     setDrafts({});
     setOpen({});
     setEvOpen({});
     setLinks({});
+    setCorrecting({});
   }, [selectedId, period]);
 
-  /* Breakdown types are optional: without any, the form works as before */
+  /* Disaggregation categories are administrator-configured. Gender/sex is prioritised
+     and automatically expanded when available; no categories are invented in the UI. */
   useEffect(() => {
     let mounted = true;
     api("/me/disaggregations")
-      .then((r) => mounted && setTypes(r.disaggregations || []))
+      .then((r) => {
+        if (!mounted) return;
+        const configured = r.disaggregations || [];
+        setTypes([...configured.filter(isGenderType), ...configured.filter((type) => !isGenderType(type))]);
+      })
       .catch(() => {});
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [typesVersion]);
+
+  /* Administrator: add the Gender type with the categories they choose */
+  const addGenderType = () =>
+    run(async () => {
+      const categories = [...new Set(setupCats.split(",").map((c) => c.trim()).filter(Boolean))];
+      if (categories.length < 2) throw new Error("Add at least two categories, separated by commas.");
+      await api("/me/disaggregations", { method: "POST", body: { name: "Gender", categories } });
+      setSetupCats("");
+      setTypesVersion((v) => v + 1);
+    });
 
   const expected = rows.filter((r) => r.target !== undefined);
   const groups = ordered
@@ -97,19 +132,47 @@ function MEForms() {
       comment: saved?.comment ?? "",
       breakdown: saved?.breakdown ?? {},
       evidence: saved?.evidence ?? [],
+      correctionNote: "",
     };
   const setDraft = (ind, saved, patch) =>
     setDrafts((cur) => ({ ...cur, [ind.id]: { ...draftFor(ind, saved), ...patch } }));
+  /* Typing a breakdown number also fills the actual value: it becomes the total of the
+     driving breakdown (gender first), so the two can never disagree. */
   const setCell = (ind, saved, typeId, category, value) => {
     const current = draftFor(ind, saved).breakdown || {};
+    const next = { ...current, [typeId]: { ...(current[typeId] || {}), [category]: value } };
+    const driver = driverType(next, types);
     setDraft(ind, saved, {
-      breakdown: { ...current, [typeId]: { ...(current[typeId] || {}), [category]: value } },
+      breakdown: next,
+      ...(driver ? { actual: String(sumOf(next[driver.id], driver)) } : {}),
     });
   };
 
+  /* An approved value is only included once the person has chosen to correct it */
   const pending = expected.filter(
-    (r) => r.saved?.status !== "approved" && drafts[r.ind.id] && drafts[r.ind.id].actual !== ""
+    (r) =>
+      (r.saved?.status !== "approved" || correcting[r.ind.id]) &&
+      drafts[r.ind.id] &&
+      drafts[r.ind.id].actual !== ""
   );
+
+  /* ---------- Corrections ---------- */
+
+  const startCorrection = (ind) => {
+    setCorrecting((cur) => ({ ...cur, [ind.id]: true }));
+    setEvOpen((cur) => ({ ...cur, [ind.id]: true }));
+  };
+
+  const cancelCorrection = (ind) => {
+    setCorrecting((cur) => {
+      const { [ind.id]: _gone, ...rest } = cur;
+      return rest;
+    });
+    setDrafts((cur) => {
+      const { [ind.id]: _gone, ...rest } = cur;
+      return rest;
+    });
+  };
 
   /* ---------- Evidence ---------- */
 
@@ -185,16 +248,20 @@ function MEForms() {
   /*
    * Values are saved one at a time. If one fails, the values that already went
    * through are cleared from the drafts and the data is reloaded, so a retry
-   * only sends what is still unsaved. Breakdowns are checked first, so a mistake
-   * is caught before anything is sent.
+   * only sends what is still unsaved. Breakdowns and correction notes are checked
+   * first, so a mistake is caught before anything is sent.
    */
   const submitAll = () =>
     run(async () => {
       if (pending.length === 0) throw new Error("Enter at least one actual value first.");
 
       for (const { ind, saved } of pending) {
-        const problem = breakdownProblem(draftFor(ind, saved), types);
+        const d = draftFor(ind, saved);
+        const problem = breakdownProblem(d, types);
         if (problem) throw new Error(`${ind.name}: ${problem}`);
+        if (saved?.status === "approved" && !d.correctionNote.trim()) {
+          throw new Error(`${ind.name}: write a note for the administrator explaining the correction.`);
+        }
       }
 
       const savedIds = [];
@@ -210,14 +277,21 @@ function MEForms() {
               actual: d.actual,
               comment: d.comment,
               evidence: d.evidence || [],
+              ...(saved?.status === "approved" ? { correctionNote: d.correctionNote.trim() } : {}),
               ...(Object.keys(breakdown).length ? { breakdown } : {}),
             },
           });
           savedIds.push(ind.id);
         }
         setDrafts({});
+        setCorrecting({});
       } catch (err) {
         setDrafts((cur) => {
+          const next = { ...cur };
+          savedIds.forEach((id) => delete next[id]);
+          return next;
+        });
+        setCorrecting((cur) => {
           const next = { ...cur };
           savedIds.forEach((id) => delete next[id]);
           return next;
@@ -361,7 +435,9 @@ function MEForms() {
             </div>
           </div>
         )}
-        <p className="text-xs text-[#98A2B3]">PDF, JPG, PNG, CSV, Word or Excel, up to 10 MB each. Evidence is saved when you submit the value.</p>
+        <p className="text-xs text-[#98A2B3]">
+          PDF, JPG, PNG, CSV, Word or Excel, up to 10 MB each. Evidence is saved when you submit the value. The administrator cannot approve a value without evidence.
+        </p>
       </div>
     );
   };
@@ -390,6 +466,28 @@ function MEForms() {
             </p>
           )}
 
+          {!types.some(isGenderType) && (
+            <div className="rounded-lg border border-[#F3D18A] bg-[#FFFAEB] px-4 py-3 text-sm text-[#7A5C00]" role="status">
+              <p className="font-semibold">Gender disaggregation is not configured</p>
+              <p className="mt-1">
+                Add the categories you want people to report against, separated by commas. The gender fields then appear on every indicator, and the actual value fills in from them automatically.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  className={`${FIELD} w-full max-w-md`}
+                  aria-label="Gender categories, separated by commas"
+                  placeholder="Type the categories, separated by commas"
+                  value={setupCats}
+                  onChange={(e) => setSetupCats(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && setupCats.trim() && addGenderType()}
+                />
+                <button type="button" onClick={addGenderType} disabled={busy || !setupCats.trim()} className={BTN}>
+                  Add gender breakdown
+                </button>
+              </div>
+            </div>
+          )}
+
           {groups.length === 0 && (
             <div className={`${CARD} p-10 text-center text-sm text-[#667085]`}>No indicators have a target for {period}.</div>
           )}
@@ -400,20 +498,49 @@ function MEForms() {
               <ul className="mt-3 divide-y divide-[#F2F4F7]">
                 {items.map(({ ind, saved, target }) => {
                   const draft = draftFor(ind, saved);
-                  const locked = saved?.status === "approved";
+                  const approved = saved?.status === "approved";
+                  const isCorrecting = Boolean(correcting[ind.id]);
+                  const locked = approved && !isCorrecting;
                   const disabled = !canEnter || locked || busy;
                   const hasBreakdown = Object.keys(saved?.breakdown || {}).length > 0;
-                  const isOpen = open[ind.id] ?? hasBreakdown;
+                  const hasGenderType = types.some(isGenderType);
+                  const isOpen = open[ind.id] ?? (hasBreakdown || hasGenderType);
                   const evidenceCount = (draft.evidence || []).length;
                   const evidenceOpen = evOpen[ind.id] ?? false;
                   const showEvidenceToggle = canEnter || evidenceCount > 0;
+                  const pendingCorrection = saved?.status === "submitted" ? saved.correction : null;
+                  /* Actual over target, updating as the person types */
+                  const actualNum = isEmpty(draft.actual) || Number.isNaN(Number(draft.actual)) ? null : Number(draft.actual);
+                  const targetNum = Number(target);
+                  const pct = actualNum !== null && targetNum > 0 ? Math.round((actualNum / targetNum) * 100) : null;
+                  const barColor = pct === null ? "#D9D9DF" : pct >= 90 ? "#1F7A5C" : pct >= 50 ? "#D4A600" : "#B42318";
                   return (
                     <li key={ind.id} className="py-4">
                       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_8rem_14rem_9rem] md:items-start">
                         <div>
                           <p className="text-sm font-medium text-[#101828]">{ind.name}</p>
-                          <p className="mt-0.5 text-xs text-[#667085]">
-                            Target {target}{ind.unit ? ` ${ind.unit}` : ""} · Baseline {ind.baseline ?? "-"}
+                          <div className="mt-2 max-w-xs">
+                            <div className="flex items-baseline justify-between gap-3">
+                              <p className="tabular-nums">
+                                <span className="text-lg font-semibold text-[#101828]">{actualNum ?? "-"}</span>
+                                <span className="text-sm text-[#98A2B3]"> / {target}</span>
+                                {ind.unit ? <span className="ml-1.5 text-xs text-[#667085]">{ind.unit}</span> : null}
+                              </p>
+                              {pct !== null && <span className="text-xs font-semibold tabular-nums text-[#475467]">{pct}%</span>}
+                            </div>
+                            <div
+                              className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EEF0F4]"
+                              role="progressbar"
+                              aria-label={`Actual against ${period} target for ${ind.name}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.min(pct ?? 0, 100)}
+                            >
+                              <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: barColor }} />
+                            </div>
+                          </div>
+                          <p className="mt-1.5 text-xs text-[#98A2B3]">
+                            {period} target · Baseline {ind.baseline ?? "-"}
                           </p>
                           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
                             {types.length > 0 && (
@@ -423,7 +550,7 @@ function MEForms() {
                                 aria-expanded={isOpen}
                                 className="text-xs font-medium text-[#5B3FD0] hover:underline"
                               >
-                                {isOpen ? "Hide breakdown" : hasBreakdown ? "Show breakdown" : "Add breakdown (sex, age and more)"}
+                                {isOpen ? "Hide gender and other breakdowns" : hasBreakdown ? "Show gender and other breakdowns" : "Add gender and other breakdowns"}
                               </button>
                             )}
                             {showEvidenceToggle && (
@@ -438,15 +565,23 @@ function MEForms() {
                             )}
                           </div>
                         </div>
-                        <input
-                          type="number"
-                          aria-label={`Actual for ${ind.name}`}
-                          placeholder="Actual"
-                          value={draft.actual}
-                          onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
-                          disabled={disabled}
-                          className={FIELD}
-                        />
+                        <div>
+                          <input
+                            type="number"
+                            aria-label={`Actual for ${ind.name}`}
+                            placeholder="Actual"
+                            value={draft.actual}
+                            onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
+                            disabled={disabled}
+                            readOnly={Boolean(driverType(draft.breakdown, types))}
+                            className={`${FIELD} w-full ${driverType(draft.breakdown, types) ? "bg-[#F4F5F7]" : ""}`}
+                          />
+                          {driverType(draft.breakdown, types) && (
+                            <p className="mt-1 text-[11px] leading-tight text-[#667085]">
+                              Total of {driverType(draft.breakdown, types).name.toLowerCase()}. Clear it to type a value.
+                            </p>
+                          )}
+                        </div>
                         <input
                           type="text"
                           aria-label={`Comment for ${ind.name}`}
@@ -456,8 +591,50 @@ function MEForms() {
                           disabled={disabled}
                           className={FIELD}
                         />
-                        <div className="pt-1.5"><StatusPill status={saved?.status} /></div>
+                        <div className="space-y-2 pt-1.5">
+                          <StatusPill status={saved?.status} />
+                          {canEnter && locked && (
+                            <button type="button" className={SMALL} disabled={busy} onClick={() => startCorrection(ind)}>
+                              Correct this value
+                            </button>
+                          )}
+                        </div>
                       </div>
+
+                      {pendingCorrection && (
+                        <p className="mt-3 rounded-lg border border-[#F3D18A] bg-[#FFFAEB] px-4 py-3 text-xs text-[#7A5C00]">
+                          <span className="font-semibold">Correction awaiting approval.</span> The approved value was {pendingCorrection.previous?.actual ?? "-"}.
+                          {" "}Your note: {pendingCorrection.note}
+                        </p>
+                      )}
+
+                      {approved && saved?.lastCorrectionRejected && !isCorrecting && (
+                        <p className="mt-3 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] px-4 py-3 text-xs text-[#B42318]">
+                          A correction was rejected by {saved.lastCorrectionRejected.by || "the administrator"}. The approved value was kept.
+                        </p>
+                      )}
+
+                      {isCorrecting && (
+                        <div className="mt-3 rounded-lg border border-[#F3D18A] bg-[#FFFAEB] p-4">
+                          <label className="block text-xs font-semibold text-[#7A5C00]">
+                            Note for the administrator (required)
+                            <textarea
+                              rows={2}
+                              maxLength={1000}
+                              aria-label={`Correction note for ${ind.name}`}
+                              className={`${FIELD} mt-1 w-full font-normal`}
+                              value={draft.correctionNote}
+                              onChange={(e) => setDraft(ind, saved, { correctionNote: e.target.value })}
+                            />
+                          </label>
+                          <p className="mt-2 text-[11px] leading-snug text-[#7A5C00]">
+                            When you submit, this value goes back to awaiting approval and leaves the approved results until the administrator approves it. If the correction is rejected, the earlier approved value is restored.
+                          </p>
+                          <button type="button" className={`${SMALL} mt-3`} onClick={() => cancelCorrection(ind)}>
+                            Cancel correction
+                          </button>
+                        </div>
+                      )}
 
                       {isOpen && types.length > 0 && renderBreakdown(ind, saved, disabled)}
                       {evidenceOpen && showEvidenceToggle && renderEvidence(ind, saved, disabled)}

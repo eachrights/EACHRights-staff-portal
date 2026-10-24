@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../../meApi";
+import { LABELS } from "../../labels";
 
 /* Same tokens as the project view */
 const FOCUS =
@@ -9,7 +10,13 @@ const BTN = `rounded-lg bg-[#5B3FD0] px-3.5 py-2 text-sm font-semibold text-whit
 const BTN_SM = `rounded-md border border-[#D0D5DD] bg-white px-3 py-1.5 text-xs font-semibold text-[#344054] transition hover:bg-[#F4F5F7] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
 const CARD = "rounded-xl border border-[#E5E7EB] bg-white";
 
-/* Ways projects can be grouped. Each reads a field on the project record. */
+/* Words come from labels.js, so they follow the organisation's wording */
+const P = LABELS.projectLower;
+const PS = LABELS.projectsLower;
+const PS_CAP = LABELS.projects;
+const AREA = LABELS.programme;
+
+/* Ways initiatives can be grouped. Each reads a field on the record. */
 const GROUP_BY = [
   { key: "", label: "No grouping" },
   { key: "theme", label: "Theme" },
@@ -17,7 +24,7 @@ const GROUP_BY = [
   { key: "donor", label: "Donor" },
   { key: "partner", label: "Partner" },
   { key: "region", label: "Region" },
-  { key: "area", label: "Department" },
+  { key: "area", label: AREA },
 ];
 const DETAIL_FIELDS = [
   { key: "donor", label: "Donor" },
@@ -27,6 +34,13 @@ const DETAIL_FIELDS = [
   { key: "region", label: "Region" },
 ];
 const NOT_SET = "Not set";
+
+const splitList = (s) => s.split(",").map((v) => v.trim()).filter(Boolean);
+
+const fmtDay = (s) => {
+  const t = s ? new Date(s).getTime() : NaN;
+  return Number.isNaN(t) ? "" : new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
 
 const progressOf = (pct) => (pct === null ? "none" : pct >= 90 ? "on" : pct >= 50 ? "risk" : "off");
 const PROGRESS = {
@@ -208,12 +222,39 @@ function PortfolioView() {
 
   const startEdit = (p) => {
     setEditing(p.id);
-    setDraft(Object.fromEntries(DETAIL_FIELDS.map((f) => [f.key, p[f.key] || ""])));
+    setDraft({
+      ...Object.fromEntries(DETAIL_FIELDS.map((f) => [f.key, p[f.key] || ""])),
+      startDate: p.startDate || "",
+      endDate: p.endDate || "",
+      budget: p.budget ?? "",
+      currency: p.currency || "",
+      countries: (p.countries || []).join(", "),
+    });
   };
 
   const saveDetails = (p) =>
     run(async () => {
-      await api(`/me/frameworks/${p.id}/details`, { method: "PUT", body: draft });
+      if (draft.startDate && draft.endDate && draft.endDate < draft.startDate) {
+        throw new Error("The end date cannot be before the start date.");
+      }
+      if (draft.budget !== "" && (Number.isNaN(Number(draft.budget)) || Number(draft.budget) < 0)) {
+        throw new Error("The budget must be a number, zero or more.");
+      }
+      await api(`/me/frameworks/${p.id}/details`, {
+        method: "PUT",
+        body: {
+          donor: (draft.donor || "").trim(),
+          theme: (draft.theme || "").trim(),
+          focusArea: (draft.focusArea || "").trim(),
+          partner: (draft.partner || "").trim(),
+          region: (draft.region || "").trim(),
+          startDate: draft.startDate,
+          endDate: draft.endDate,
+          budget: draft.budget === "" ? "" : Number(draft.budget),
+          currency: (draft.currency || "").trim(),
+          countries: splitList(draft.countries || ""),
+        },
+      });
       setEditing(null);
       await load();
     }, `Details saved for ${p.name}.`);
@@ -237,7 +278,7 @@ function PortfolioView() {
 
   const deleteStrategic = (s) => {
     const ok = window.confirm(
-      `Delete "${s.name}"?\n\nProject indicators linked to it are unlinked, not deleted. This cannot be undone.`
+      `Delete "${s.name}"?\n\nIndicators linked to it are unlinked, not deleted. This cannot be undone.`
     );
     if (!ok) return;
     run(async () => {
@@ -325,6 +366,30 @@ function PortfolioView() {
       approve ? `Approved ${v.indicatorName} for ${v.period}.` : `Rejected ${v.indicatorName} for ${v.period}. Staff can report it again.`
     );
 
+  /* Evidence attached to a reported value. Files open through a short-lived link, so they stay private. */
+  const openEvidence = (v, item) =>
+    run(async () => {
+      if (item.type === "link") {
+        window.open(item.url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const tab = window.open("about:blank", "_blank");
+      try {
+        const { url } = await api(
+          `/me/frameworks/${v.frameworkId}/evidence/download-url?key=${encodeURIComponent(item.key)}`
+        );
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = url;
+        } else {
+          window.location.assign(url);
+        }
+      } catch (err) {
+        tab?.close();
+        throw err;
+      }
+    });
+
   const strategic = portfolio?.strategic ?? [];
   const projects = portfolio?.projects ?? [];
   const types = portfolio?.disaggregationTypes ?? [];
@@ -379,6 +444,11 @@ function PortfolioView() {
           <p className="mt-0.5 text-xs text-[#667085]">
             {[p.theme, p.region].filter(Boolean).join(", ") || "No theme or region set"}
           </p>
+          {(p.startDate || p.endDate) && (
+            <p className="mt-0.5 text-xs text-[#98A2B3]">
+              {fmtDay(p.startDate) || "Not set"} to {fmtDay(p.endDate) || "Not set"}
+            </p>
+          )}
         </td>
         <td className="px-3 py-3.5 text-[#475467]">{p.donor || NOT_SET}</td>
         <td className="px-3 py-3.5 text-right tabular-nums text-[#475467]">{fmt(p.indicators)}</td>
@@ -431,6 +501,26 @@ function PortfolioView() {
                   />
                 </label>
               ))}
+              <label className="w-44 text-xs font-medium text-[#475467]">
+                Start date
+                <input type="date" className={`${FIELD} mt-1 block w-full`} value={draft.startDate ?? ""} onChange={(e) => setDraft((cur) => ({ ...cur, startDate: e.target.value }))} />
+              </label>
+              <label className="w-44 text-xs font-medium text-[#475467]">
+                End date
+                <input type="date" className={`${FIELD} mt-1 block w-full`} value={draft.endDate ?? ""} onChange={(e) => setDraft((cur) => ({ ...cur, endDate: e.target.value }))} />
+              </label>
+              <label className="w-36 text-xs font-medium text-[#475467]">
+                Budget
+                <input type="number" min="0" className={`${FIELD} mt-1 block w-full`} value={draft.budget ?? ""} onChange={(e) => setDraft((cur) => ({ ...cur, budget: e.target.value }))} />
+              </label>
+              <label className="w-24 text-xs font-medium text-[#475467]">
+                Currency
+                <input className={`${FIELD} mt-1 block w-full`} maxLength={8} placeholder="USD" value={draft.currency ?? ""} onChange={(e) => setDraft((cur) => ({ ...cur, currency: e.target.value }))} />
+              </label>
+              <label className="w-56 text-xs font-medium text-[#475467]">
+                Countries (commas)
+                <input className={`${FIELD} mt-1 block w-full`} placeholder="Kenya, Uganda" value={draft.countries ?? ""} onChange={(e) => setDraft((cur) => ({ ...cur, countries: e.target.value }))} />
+              </label>
               <button type="button" className={BTN} disabled={busy} onClick={() => saveDetails(p)}>
                 Save details
               </button>
@@ -447,7 +537,7 @@ function PortfolioView() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">Portfolio</h1>
           <p className="mt-1 text-sm text-[#667085]">
-            Approved results from every shared project, rolled up through strategic indicators.
+            Approved results from every shared {P}, rolled up through strategic indicators.
           </p>
         </div>
         <button type="button" className={BTN_SM} disabled={strategic.length === 0} onClick={exportCsv}>
@@ -471,8 +561,8 @@ function PortfolioView() {
       <dl className={`${CARD} grid divide-y divide-[#EEF0F4] sm:grid-cols-5 sm:divide-x sm:divide-y-0`}>
         {[
           ["Strategic indicators", strategic.length],
-          ["Projects", projects.length],
-          ["Shared projects", sharedCount],
+          [PS_CAP, projects.length],
+          [`Shared ${PS}`, sharedCount],
           ["Linked indicators", linkedCount],
           ["Awaiting approval", pendingCount],
         ].map(([label, value]) => (
@@ -487,22 +577,22 @@ function PortfolioView() {
         <div className="px-6 pt-6">
           <SectionHead
             title="Awaiting approval"
-            subtitle="Values staff have reported. Approving a value locks it and adds it to the results. Rejecting it lets staff report it again."
+            subtitle="Values staff have reported, with the evidence they attached. Open the evidence before you decide. Approving a value locks it and adds it to the results. Rejecting it lets staff report it again."
           />
         </div>
         {pendingValues.length === 0 ? (
           <p className="px-6 pb-8 text-center text-sm text-[#667085]">Nothing is waiting for approval.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-left text-sm">
+            <table className="w-full min-w-[900px] text-left text-sm">
               <caption className="sr-only">Reported values awaiting approval</caption>
               <thead>
                 <tr className="text-xs font-medium text-[#667085]">
-                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">Project and indicator</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">{LABELS.project} and indicator</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Period</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Reported</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Target</th>
-                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Comment</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Comment and evidence</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">Decision</th>
                 </tr>
               </thead>
@@ -521,7 +611,30 @@ function PortfolioView() {
                       {fmt(v.actual)} {v.unit && <span className="text-xs text-[#667085]">{v.unit}</span>}
                     </td>
                     <td className="px-3 py-3.5 text-right tabular-nums text-[#475467]">{fmt(v.target)}</td>
-                    <td className="max-w-[240px] px-3 py-3.5 text-[#475467]">{v.comment || "No comment"}</td>
+                    <td className="max-w-[280px] px-3 py-3.5 text-[#475467]">
+                      <p>{v.comment || "No comment"}</p>
+                      {(v.evidence ?? []).length > 0 ? (
+                        <ul className="mt-2 space-y-1">
+                          {v.evidence.map((e, i) => (
+                            <li key={`${e.type}-${e.key || e.url}-${i}`} className="flex items-center gap-1.5">
+                              <span className="rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]">
+                                {e.type === "file" ? "File" : "Link"}
+                              </span>
+                              <button
+                                type="button"
+                                className="min-w-0 truncate text-left text-xs font-medium text-[#00664E] hover:underline"
+                                title={e.name}
+                                onClick={() => openEvidence(v, e)}
+                              >
+                                {e.name}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-xs text-[#98A2B3]">No evidence attached</p>
+                      )}
+                    </td>
                     <td className="px-6 py-3.5">
                       <div className="flex items-center gap-2">
                         <button type="button" className={BTN} disabled={busy} onClick={() => review(v, true)}
@@ -545,7 +658,7 @@ function PortfolioView() {
       <section aria-label="Strategic indicators" className={`${CARD} p-6`}>
         <SectionHead
           title="Strategic indicators"
-          subtitle="Values are added together across shared projects, so this suits countable indicators such as people reached. Share a project below, then link its indicators from the project view."
+          subtitle={`Values are added together across shared ${PS}, so this suits countable indicators such as people reached. Share an ${P} below, then link its indicators.`}
         />
 
         <div className="mb-5 flex flex-wrap items-end gap-2">
@@ -574,7 +687,7 @@ function PortfolioView() {
 
         {strategic.length === 0 ? (
           <p className="rounded-lg border border-dashed border-[#D0D5DD] px-6 py-10 text-center text-sm text-[#667085]">
-            No strategic indicators yet. Add one above, then link project indicators to it.
+            No strategic indicators yet. Add one above, then link indicators to it.
           </p>
         ) : (
           <ul className="divide-y divide-[#F2F4F7] border-t border-[#F2F4F7]">
@@ -670,13 +783,13 @@ function PortfolioView() {
                     <>
                       <div className="mt-4 flex flex-wrap items-end gap-2">
                         <label className="grow basis-64 text-xs font-medium text-[#475467]">
-                          Link a project indicator
+                          Link an indicator
                           <select
                             className={`${FIELD} mt-1 block w-full`}
                             value={linkChoice[s.id] ?? ""}
                             onChange={(e) => setLinkChoice((cur) => ({ ...cur, [s.id]: e.target.value }))}
                           >
-                            <option value="">Choose an indicator from a shared project</option>
+                            <option value="">Choose an indicator from a shared {P}</option>
                             {projects
                               .filter((p) => p.shared)
                               .map((p) => {
@@ -705,15 +818,15 @@ function PortfolioView() {
                         </button>
                       </div>
                       <p className="mt-1 text-xs text-[#667085]">
-                        Only indicators from shared projects that are not linked yet are listed.
+                        Only indicators from shared {PS} that are not linked yet are listed.
                       </p>
 
                       <div className="mt-4 overflow-x-auto rounded-lg border border-[#EEF0F4]">
                         <table className="w-full min-w-[640px] text-left text-sm">
-                          <caption className="sr-only">Project indicators linked to {s.name}</caption>
+                          <caption className="sr-only">Indicators linked to {s.name}</caption>
                           <thead>
                             <tr className="bg-[#F9FAFB] text-xs font-medium text-[#667085]">
-                              <th scope="col" className="px-4 py-2.5">Project</th>
+                              <th scope="col" className="px-4 py-2.5">{LABELS.project}</th>
                               <th scope="col" className="px-3 py-2.5">Indicator</th>
                               <th scope="col" className="px-3 py-2.5 text-right">Approved</th>
                               <th scope="col" className="px-4 py-2.5 text-right">Target to date</th>
@@ -768,7 +881,7 @@ function PortfolioView() {
       <section aria-label="Disaggregation types" className={`${CARD} p-6`}>
         <SectionHead
           title="Disaggregation types"
-          subtitle="Define how results can be broken down, such as sex or age group. Staff then report an approved value split across these categories, and each split must add up to the value."
+          subtitle="Define how results can be broken down, such as gender or age group. Staff then report a value split across these categories, and each split must add up to the value. The actual value fills in from the first breakdown they complete."
         />
 
         <div className="mb-5 flex flex-wrap items-end gap-2">
@@ -778,7 +891,7 @@ function PortfolioView() {
               className={`${FIELD} mt-1 block w-full`}
               value={typeName}
               onChange={(e) => setTypeName(e.target.value)}
-              placeholder="Sex"
+              placeholder="Gender"
             />
           </label>
           <label className="grow text-xs font-medium text-[#475467]">
@@ -787,7 +900,7 @@ function PortfolioView() {
               className={`${FIELD} mt-1 block w-full`}
               value={typeCategories}
               onChange={(e) => setTypeCategories(e.target.value)}
-              placeholder="Female, Male"
+              placeholder="Type the categories, separated by commas"
             />
           </label>
           <button
@@ -862,15 +975,15 @@ function PortfolioView() {
         )}
       </section>
 
-      <section aria-label="Projects" className={`${CARD} overflow-hidden`}>
+      <section aria-label={PS_CAP} className={`${CARD} overflow-hidden`}>
         <div className="px-6 pt-6">
           <SectionHead
-            title="Projects"
-            subtitle="Group projects by theme, focus area, donor, partner, region or department. Only shared projects count towards strategic indicators."
+            title={PS_CAP}
+            subtitle={`Group ${PS} by theme, focus area, donor, partner, region or ${AREA.toLowerCase()}. Only shared ${PS} count towards strategic indicators.`}
           />
           <div className="mb-5 flex flex-wrap items-end gap-2">
             <label className="grow basis-56 text-xs font-medium text-[#475467]">
-              Filter projects
+              Filter {PS}
               <input
                 type="search"
                 className={`${FIELD} mt-1 block w-full`}
@@ -901,16 +1014,16 @@ function PortfolioView() {
         ))}
 
         {projects.length === 0 ? (
-          <p className="px-6 pb-10 text-center text-sm text-[#667085]">No projects yet.</p>
+          <p className="px-6 pb-10 text-center text-sm text-[#667085]">No {PS} yet.</p>
         ) : visibleCount === 0 ? (
-          <p className="px-6 pb-10 text-center text-sm text-[#667085]">No projects match “{query}”. Clear the filter to see all projects.</p>
+          <p className="px-6 pb-10 text-center text-sm text-[#667085]">No {PS} match “{query}”. Clear the filter to see all {PS}.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[960px] text-left text-sm">
-              <caption className="sr-only">Reporting progress by project</caption>
+              <caption className="sr-only">Reporting progress by {P}</caption>
               <thead>
                 <tr className="text-xs font-medium text-[#667085]">
-                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">Project</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">{LABELS.project}</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Donor</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Indicators</th>
                   <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Approved values</th>
@@ -927,7 +1040,7 @@ function PortfolioView() {
                           <span className="text-sm font-semibold text-[#101828]">
                             {g.label}
                             <span className="ml-2 text-xs font-normal text-[#667085]">
-                              {g.items.length} {g.items.length === 1 ? "project" : "projects"} by {groupLabel}
+                              {g.items.length} {g.items.length === 1 ? P : PS} by {groupLabel}
                             </span>
                           </span>
                           <Progress pct={g.avgPct} />

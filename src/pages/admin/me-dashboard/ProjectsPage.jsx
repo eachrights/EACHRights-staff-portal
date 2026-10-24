@@ -637,6 +637,21 @@ function ProjectView({ frameworkId, onBack }) {
     const awaitingIds = new Set(awaitingValues.map((v) => v.indicatorId));
     /* Awaiting only counts indicators that have nothing approved yet */
     const awaitingOnly = [...awaitingIds].filter((id) => !approvedIds.has(id)).length;
+
+    /* Evidence coverage applies to reported values only: approved or awaiting approval. */
+    const reportedValues = data.values.filter((v) => v.status === "approved" || v.status === "submitted");
+    const hasEvidence = (value) => {
+      const evidence = value?.evidence;
+      if (Array.isArray(evidence)) return evidence.length > 0;
+      if (evidence && typeof evidence === "object") {
+        return Object.values(evidence).some((item) => Array.isArray(item) ? item.length > 0 : Boolean(item));
+      }
+      return Boolean(evidence);
+    };
+    const withEvidence = reportedValues.filter(hasEvidence).length;
+    const evidenceTotal = reportedValues.length;
+    const evidenceComplete = evidenceTotal > 0 && withEvidence === evidenceTotal;
+
     const perResult = new Map();
     for (const i of data.indicators) perResult.set(i.resultId, (perResult.get(i.resultId) || 0) + 1);
     const total = data.indicators.length;
@@ -646,6 +661,7 @@ function ProjectView({ frameworkId, onBack }) {
       approved: approvedIds.size,
       awaiting: awaitingValues.length,
       awaitingOnly,
+      evidence: { withEvidence, total: evidenceTotal, complete: evidenceComplete },
       noData: Math.max(total - approvedIds.size - awaitingOnly, 0),
       perResult,
     };
@@ -896,7 +912,7 @@ function ProjectView({ frameworkId, onBack }) {
       </section>
 
       {/* Key numbers */}
-      <section aria-label="Key numbers" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Key numbers" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Tile label="Results" value={data.results.length} note="In the project logic" />
         <Tile label="Indicators" value={totalIndicators} note={`${stats.connected} connected to results`} />
         <Tile label="With approved values" value={`${stats.approved} of ${totalIndicators}`} note={`${coveragePct}% coverage`} color="#1F7A5C" />
@@ -905,6 +921,12 @@ function ProjectView({ frameworkId, onBack }) {
           value={stats.awaiting}
           note={access.isAdmin ? (stats.awaiting ? "Ready for your review" : "Nothing to review") : "With the administrator"}
           color={stats.awaiting ? "#D4A600" : undefined}
+        />
+        <Tile
+          label="With evidence"
+          value={`${stats.evidence.withEvidence} of ${stats.evidence.total}`}
+          note="Reported values with files or links"
+          color={stats.evidence.complete ? "#1F7A5C" : undefined}
         />
       </section>
 
