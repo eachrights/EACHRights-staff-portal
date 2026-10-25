@@ -4,12 +4,18 @@ import { api } from "../../../meApi";
 import { LABELS } from "../../../labels";
 import { BTN, BTN_LIGHT, CARD, CardHead, ErrorBar, FIELD, NoFramework, Page, PageHead, useMEData } from "./Shared";
 import PeopleAccess from "./PeopleAccess";
+import LogFrame from "./LogFrame";
 
 const AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "No area";
 
-/* Levels follow the MEAL Framework (Chapter 3): impact, outcome, output */
-const DEFAULT_LEVELS = ["Impact", "Outcome", "Output"];
+/* Levels follow the MEAL Framework (Chapter 3): impact, outcome, output, with activities at the bottom of the logframe */
+const DEFAULT_LEVELS = ["Impact", "Outcome", "Output", "Activity"];
+
+const VIEWS = [
+  ["results", "Results and indicators"],
+  ["logframe", "Logical framework"],
+];
 
 const DANGER =
   "rounded-lg border border-[#FDA29B] bg-white px-3.5 py-2 text-sm font-semibold text-[#B42318] transition hover:bg-[#FEF3F2] disabled:cursor-not-allowed disabled:opacity-60";
@@ -190,6 +196,8 @@ function MEFrameworks() {
   const [editingResult, setEditingResult] = useState(null);
   const [resultTitle, setResultTitle] = useState("");
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
+  /* Which view of the selected framework is open: the results list or the logframe table */
+  const [view, setView] = useState("results");
 
   useEffect(() => {
     let mounted = true;
@@ -292,8 +300,17 @@ function MEFrameworks() {
   const openAddUnder = (r) => {
     setRf({ title: "", level: r.level + 1, parentId: r.id });
     setShowAddResult(true);
+    setView("results");
     setTimeout(() => addRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
   };
+
+  /* Frameworks made before the logframe have three levels. This adds Activity at the bottom. */
+  const addActivityLevel = () =>
+    run(async () => {
+      await api(`/me/frameworks/${selectedId}/levels`, { method: "POST", body: { name: "Activity" } });
+      await loadList(selectedId);
+      await reload();
+    });
 
   const toggleAddResult = () => {
     if (showAddResult) {
@@ -515,218 +532,261 @@ function MEFrameworks() {
                 )}
               </section>
 
-              {/* Results, with the add form built in */}
-              <section className={`${CARD} p-5`} aria-label="Results">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <CardHead title="Results hierarchy" subtitle="Build the results chain from impact → outcome → output. Add an impact first, then link each outcome to an impact and each output to an outcome. Indicators should measure the result they are linked to. A result can only be deleted once nothing sits under it." />
-                  </div>
-                  {canManage && !resultsEmpty && (
-                    <button type="button" onClick={toggleAddResult} className={`${BTN} shrink-0`}>
-                      {showAddResult ? "Close" : "Add result"}
-                    </button>
-                  )}
-                </div>
+              {/* Switch between the results list and the logframe table */}
+              <div role="tablist" aria-label="Framework views" className="flex gap-1">
+                {VIEWS.map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === key}
+                    onClick={() => setView(key)}
+                    className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                      view === key ? "bg-[#EDE9FB] text-[#5B3FD0]" : "text-[#475467] hover:bg-[#F4F5F7]"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
-                {addFormOpen && (
-                  <div ref={addRef} className="mb-4 rounded-lg border border-[#DDD6F7] bg-[#F8F7FE] p-4" aria-label="Add result">
-                    <p className="mb-3 text-sm font-semibold text-[#3B2A8F]">
-                      {resultsEmpty ? "Start with the impact" : "New result"}
-                    </p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Title" wide>
-                        <input
-                          className={`${FIELD} w-full`}
-                          value={rf.title}
-                          onChange={(e) => setRf({ ...rf, title: e.target.value })}
-                          onKeyDown={(e) => e.key === "Enter" && !busy && addResult()}
-                        />
-                      </Field>
-                      <Field label="Level">
-                        <select
-                          className={`${FIELD} w-full`}
-                          value={rf.level}
-                          onChange={(e) => setRf({ ...rf, level: Number(e.target.value), parentId: "" })}
-                        >
-                          {levels.map((name, i) => (
-                            <option key={name} value={i} disabled={resultsEmpty && i > 0}>{name}</option>
-                          ))}
-                        </select>
-                      </Field>
-                      <Field label={Number(rf.level) === 0 ? "Parent result (not required for impact)" : `Parent ${levels[Number(rf.level) - 1] || "result"} (required)`}>
-                        <select
-                          className={`${FIELD} w-full`}
-                          value={rf.parentId}
-                          disabled={Number(rf.level) === 0}
-                          onChange={(e) => setRf({ ...rf, parentId: e.target.value })}
-                        >
-                          <option value="">{Number(rf.level) === 0 ? "Not needed for impact" : `Choose a ${levels[Number(rf.level) - 1]?.toLowerCase() || "parent result"}`}</option>
-                          {parents.map((p) => (
-                            <option key={p.id} value={p.id}>{p.title}</option>
-                          ))}
-                        </select>
-                      </Field>
-                    </div>
-                    <div className="mt-4 flex gap-2">
-                      <button type="button" onClick={addResult} disabled={busy} className={BTN}>Add result</button>
-                      {!resultsEmpty && (
-                        <button type="button" onClick={() => setShowAddResult(false)} className={BTN_LIGHT}>Close</button>
-                      )}
-                    </div>
-                  </div>
-                )}
+              {view === "logframe" && (
+                <LogFrame
+                  frameworkId={selectedId}
+                  framework={fw}
+                  data={data}
+                  ordered={ordered}
+                  levels={levels}
+                  canManage={canManage}
+                  busy={busy}
+                  run={run}
+                  reload={reload}
+                />
+              )}
 
-                {!resultsEmpty && (
-                  <div className="mb-3 flex flex-wrap gap-2 text-xs">
-                    {levels.map((levelName, index) => {
-                      const count = ordered.filter((result) => result.level === index).length;
-                      return (
-                        <span key={levelName} className="rounded-full bg-[#F4F5F7] px-2.5 py-1 text-[#475467]">
-                          {levelName}: <strong>{count}</strong>
-                        </span>
-                      );
-                    })}
-                    <span className="rounded-full bg-[#F0FAF6] px-2.5 py-1 text-[#00664E]">Indicators linked: <strong>{data.indicators.length}</strong></span>
-                  </div>
-                )}
-                {resultsEmpty ? (
-                  !canManage && <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet.</p>
-                ) : (
-                  <ul className="space-y-1.5">
-                    {ordered.map((r) => (
-                      <li
-                        key={r.id}
-                        style={{ marginLeft: `${r.depth * 20}px` }}
-                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#EEF0F4] px-3 py-2.5"
-                      >
-                        <div className="min-w-0 grow">
-                          <p className="text-[11px] font-medium text-[#98A2B3]">{levels[r.level] ?? `Level ${r.level + 1}`}</p>
-                          {editingResult === r.id ? (
+              {view === "results" && (
+                <>
+                  {/* Results, with the add form built in */}
+                  <section className={`${CARD} p-5`} aria-label="Results">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <CardHead title="Results hierarchy" subtitle="Build the results chain from impact → outcome → output → activity. Add an impact first, then link each outcome to an impact, each output to an outcome and each activity to an output. Indicators should measure the result they are linked to. A result can only be deleted once nothing sits under it." />
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        {canManage && !levels.some((l) => l.toLowerCase() === "activity") && (
+                          <button type="button" onClick={addActivityLevel} disabled={busy} className={BTN_LIGHT}>
+                            Add activity level
+                          </button>
+                        )}
+                        {canManage && !resultsEmpty && (
+                          <button type="button" onClick={toggleAddResult} className={BTN}>
+                            {showAddResult ? "Close" : "Add result"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {addFormOpen && (
+                      <div ref={addRef} className="mb-4 rounded-lg border border-[#DDD6F7] bg-[#F8F7FE] p-4" aria-label="Add result">
+                        <p className="mb-3 text-sm font-semibold text-[#3B2A8F]">
+                          {resultsEmpty ? "Start with the impact" : "New result"}
+                        </p>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Field label="Title" wide>
                             <input
-                              className={`${FIELD} mt-1 w-full`}
-                              aria-label="Result title"
-                              value={resultTitle}
-                              onChange={(e) => setResultTitle(e.target.value)}
+                              className={`${FIELD} w-full`}
+                              value={rf.title}
+                              onChange={(e) => setRf({ ...rf, title: e.target.value })}
+                              onKeyDown={(e) => e.key === "Enter" && !busy && addResult()}
                             />
-                          ) : (
-                            <p className="text-sm font-medium leading-5 text-[#101828]">{r.title}</p>
+                          </Field>
+                          <Field label="Level">
+                            <select
+                              className={`${FIELD} w-full`}
+                              value={rf.level}
+                              onChange={(e) => setRf({ ...rf, level: Number(e.target.value), parentId: "" })}
+                            >
+                              {levels.map((name, i) => (
+                                <option key={name} value={i} disabled={resultsEmpty && i > 0}>{name}</option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field label={Number(rf.level) === 0 ? "Parent result (not required for impact)" : `Parent ${levels[Number(rf.level) - 1] || "result"} (required)`}>
+                            <select
+                              className={`${FIELD} w-full`}
+                              value={rf.parentId}
+                              disabled={Number(rf.level) === 0}
+                              onChange={(e) => setRf({ ...rf, parentId: e.target.value })}
+                            >
+                              <option value="">{Number(rf.level) === 0 ? "Not needed for impact" : `Choose a ${levels[Number(rf.level) - 1]?.toLowerCase() || "parent result"}`}</option>
+                              {parents.map((p) => (
+                                <option key={p.id} value={p.id}>{p.title}</option>
+                              ))}
+                            </select>
+                          </Field>
+                        </div>
+                        <div className="mt-4 flex gap-2">
+                          <button type="button" onClick={addResult} disabled={busy} className={BTN}>Add result</button>
+                          {!resultsEmpty && (
+                            <button type="button" onClick={() => setShowAddResult(false)} className={BTN_LIGHT}>Close</button>
                           )}
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="rounded-full bg-[#F4F5F7] px-2.5 py-0.5 text-xs font-medium text-[#475467]">
-                            {countFor(r.id)} {countFor(r.id) === 1 ? "indicator" : "indicators"}
-                          </span>
-                          {canManage &&
-                            (editingResult === r.id ? (
-                              <>
-                                <button type="button" className={SMALL} disabled={busy} onClick={() => saveResult(r)}>Save</button>
-                                <button type="button" className={SMALL} onClick={() => setEditingResult(null)}>Cancel</button>
-                              </>
-                            ) : (
-                              <>
-                                {r.level + 1 < levels.length && (
-                                  <button
-                                    type="button"
-                                    className={SMALL_GREEN}
-                                    disabled={busy}
-                                    aria-label={`Add ${(levels[r.level + 1] || "result").toLowerCase()} under ${r.title}`}
-                                    onClick={() => openAddUnder(r)}
-                                  >
-                                    + {levels[r.level + 1]}
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className={SMALL}
-                                  disabled={busy}
-                                  aria-label={`Edit ${r.title}`}
-                                  onClick={() => {
-                                    setEditingResult(r.id);
-                                    setResultTitle(r.title);
-                                  }}
-                                >
-                                  Edit
-                                </button>
-                                <button type="button" className={SMALL_DANGER} disabled={busy} aria-label={`Delete ${r.title}`} onClick={() => deleteResult(r)}>
-                                  Delete
-                                </button>
-                              </>
-                            ))}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                      </div>
+                    )}
 
-              {/* Indicators and their targets */}
-              <section className={`${CARD} overflow-hidden`} aria-label="Indicators and targets">
-                <div className="p-5 pb-3">
-                  <CardHead
-                    title="Indicators and targets"
-                    subtitle="Where each indicator starts (baseline) and the target set for each reporting period. A blank target means it is still to be set."
-                  />
-                </div>
-                {indicatorRows.length === 0 ? (
-                  <p className="px-5 pb-8 text-center text-sm text-[#98A2B3]">No indicators yet.</p>
-                ) : (
-                  <div className="max-h-[60vh] overflow-auto">
-                    <table className="w-full min-w-[760px] text-left text-sm">
-                      <caption className="sr-only">Indicators with baselines and targets by period</caption>
-                      <thead>
-                        <tr className="text-xs font-medium text-[#667085]">
-                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3">Indicator</th>
-                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Baseline</th>
-                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Target by period</th>
-                          <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-right">Target total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {indicatorRows.map(({ r, i }) => {
-                          const targets = i.targets && typeof i.targets === "object" ? i.targets : {};
-                          const periodTargets = (fw.periods || []).map((period) => ({
-                            period,
-                            value: targets[period],
-                            set: targets[period] !== undefined && targets[period] !== null && targets[period] !== "" && Number.isFinite(Number(targets[period])),
-                          }));
-                          const setTargets = periodTargets.filter((target) => target.set);
-                          const total = setTargets.reduce((sum, target) => sum + Number(target.value), 0);
-                          const isPercent = i.unit === "%";
-                          const hasTargets = setTargets.length > 0;
-                          const missingTargets = periodTargets.length - setTargets.length;
+                    {!resultsEmpty && (
+                      <div className="mb-3 flex flex-wrap gap-2 text-xs">
+                        {levels.map((levelName, index) => {
+                          const count = ordered.filter((result) => result.level === index).length;
                           return (
-                            <tr key={i.id} className="border-t border-[#F2F4F7] align-top">
-                              <td className="px-5 py-3">
-                                <p className="max-w-md font-medium leading-5 text-[#101828]">{i.name}</p>
-                                <p className="mt-0.5 text-xs text-[#667085]">
-                                  {levels[r.level] ?? `Level ${r.level + 1}`}
-                                  {i.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{i.unit}</span> : null}
-                                </p>
-                              </td>
-                              <td className="px-3 py-3 text-right tabular-nums text-[#475467]">{fmtNum(i.baseline)}</td>
-                              <td className="px-3 py-3">
-                                <div className="flex flex-wrap gap-1.5">
-                                  {periodTargets.map(({ period, value, set }) => (
-                                    <span key={period} className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${set ? "bg-[#EDE9FB] text-[#5B3FD0]" : "bg-[#FBF3D0] text-[#7A5C00]"}`}>
-                                      {period}: {set ? fmtNum(value) : "Not set"}
-                                    </span>
-                                  ))}
-                                </div>
-                                {missingTargets > 0 && (
-                                  <p className="mt-1.5 text-[11px] text-[#9A6700]">{missingTargets} of {periodTargets.length} period {missingTargets === 1 ? "target is" : "targets are"} still missing.</p>
-                                )}
-                              </td>
-                              <td className="px-5 py-3 text-right font-semibold tabular-nums text-[#101828]">
-                                {hasTargets && !isPercent ? fmtNum(total) : isPercent && hasTargets ? "Not additive" : "-"}
-                              </td>
-                            </tr>
+                            <span key={levelName} className="rounded-full bg-[#F4F5F7] px-2.5 py-1 text-[#475467]">
+                              {levelName}: <strong>{count}</strong>
+                            </span>
                           );
                         })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
+                        <span className="rounded-full bg-[#F0FAF6] px-2.5 py-1 text-[#00664E]">Indicators linked: <strong>{data.indicators.length}</strong></span>
+                      </div>
+                    )}
+                    {resultsEmpty ? (
+                      !canManage && <p className="py-8 text-center text-sm text-[#98A2B3]">No results yet.</p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {ordered.map((r) => (
+                          <li
+                            key={r.id}
+                            style={{ marginLeft: `${r.depth * 20}px` }}
+                            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#EEF0F4] px-3 py-2.5"
+                          >
+                            <div className="min-w-0 grow">
+                              <p className="text-[11px] font-medium text-[#98A2B3]">{levels[r.level] ?? `Level ${r.level + 1}`}</p>
+                              {editingResult === r.id ? (
+                                <input
+                                  className={`${FIELD} mt-1 w-full`}
+                                  aria-label="Result title"
+                                  value={resultTitle}
+                                  onChange={(e) => setResultTitle(e.target.value)}
+                                />
+                              ) : (
+                                <p className="text-sm font-medium leading-5 text-[#101828]">{r.title}</p>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="rounded-full bg-[#F4F5F7] px-2.5 py-0.5 text-xs font-medium text-[#475467]">
+                                {countFor(r.id)} {countFor(r.id) === 1 ? "indicator" : "indicators"}
+                              </span>
+                              {canManage &&
+                                (editingResult === r.id ? (
+                                  <>
+                                    <button type="button" className={SMALL} disabled={busy} onClick={() => saveResult(r)}>Save</button>
+                                    <button type="button" className={SMALL} onClick={() => setEditingResult(null)}>Cancel</button>
+                                  </>
+                                ) : (
+                                  <>
+                                    {r.level + 1 < levels.length && (
+                                      <button
+                                        type="button"
+                                        className={SMALL_GREEN}
+                                        disabled={busy}
+                                        aria-label={`Add ${(levels[r.level + 1] || "result").toLowerCase()} under ${r.title}`}
+                                        onClick={() => openAddUnder(r)}
+                                      >
+                                        + {levels[r.level + 1]}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className={SMALL}
+                                      disabled={busy}
+                                      aria-label={`Edit ${r.title}`}
+                                      onClick={() => {
+                                        setEditingResult(r.id);
+                                        setResultTitle(r.title);
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button type="button" className={SMALL_DANGER} disabled={busy} aria-label={`Delete ${r.title}`} onClick={() => deleteResult(r)}>
+                                      Delete
+                                    </button>
+                                  </>
+                                ))}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+
+                  {/* Indicators and their targets */}
+                  <section className={`${CARD} overflow-hidden`} aria-label="Indicators and targets">
+                    <div className="p-5 pb-3">
+                      <CardHead
+                        title="Indicators and targets"
+                        subtitle="Where each indicator starts (baseline) and the target set for each reporting period. A blank target means it is still to be set."
+                      />
+                    </div>
+                    {indicatorRows.length === 0 ? (
+                      <p className="px-5 pb-8 text-center text-sm text-[#98A2B3]">No indicators yet.</p>
+                    ) : (
+                      <div className="max-h-[60vh] overflow-auto">
+                        <table className="w-full min-w-[760px] text-left text-sm">
+                          <caption className="sr-only">Indicators with baselines and targets by period</caption>
+                          <thead>
+                            <tr className="text-xs font-medium text-[#667085]">
+                              <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3">Indicator</th>
+                              <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3 text-right">Baseline</th>
+                              <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Target by period</th>
+                              <th scope="col" className="sticky top-0 border-y border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3 text-right">Target total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {indicatorRows.map(({ r, i }) => {
+                              const targets = i.targets && typeof i.targets === "object" ? i.targets : {};
+                              const periodTargets = (fw.periods || []).map((period) => ({
+                                period,
+                                value: targets[period],
+                                set: targets[period] !== undefined && targets[period] !== null && targets[period] !== "" && Number.isFinite(Number(targets[period])),
+                              }));
+                              const setTargets = periodTargets.filter((target) => target.set);
+                              const total = setTargets.reduce((sum, target) => sum + Number(target.value), 0);
+                              const isPercent = i.unit === "%";
+                              const hasTargets = setTargets.length > 0;
+                              const missingTargets = periodTargets.length - setTargets.length;
+                              return (
+                                <tr key={i.id} className="border-t border-[#F2F4F7] align-top">
+                                  <td className="px-5 py-3">
+                                    <p className="max-w-md font-medium leading-5 text-[#101828]">{i.name}</p>
+                                    <p className="mt-0.5 text-xs text-[#667085]">
+                                      {levels[r.level] ?? `Level ${r.level + 1}`}
+                                      {i.unit ? <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] text-[#475467]">{i.unit}</span> : null}
+                                    </p>
+                                  </td>
+                                  <td className="px-3 py-3 text-right tabular-nums text-[#475467]">{fmtNum(i.baseline)}</td>
+                                  <td className="px-3 py-3">
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {periodTargets.map(({ period, value, set }) => (
+                                        <span key={period} className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${set ? "bg-[#EDE9FB] text-[#5B3FD0]" : "bg-[#FBF3D0] text-[#7A5C00]"}`}>
+                                          {period}: {set ? fmtNum(value) : "Not set"}
+                                        </span>
+                                      ))}
+                                    </div>
+                                    {missingTargets > 0 && (
+                                      <p className="mt-1.5 text-[11px] text-[#9A6700]">{missingTargets} of {periodTargets.length} period {missingTargets === 1 ? "target is" : "targets are"} still missing.</p>
+                                    )}
+                                  </td>
+                                  <td className="px-5 py-3 text-right font-semibold tabular-nums text-[#101828]">
+                                    {hasTargets && !isPercent ? fmtNum(total) : isPercent && hasTargets ? "Not additive" : "-"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -49,6 +49,14 @@ const PROGRESS = {
   off: { label: "Off track", color: "#B42318" },
   none: { label: "No data", color: "#D9D9DF" },
 };
+
+/* Wording for where a project is heading (projected), as opposed to where it is now */
+const OUTLOOK = {
+  on: "On course",
+  risk: "At risk",
+  off: "Unlikely to meet target",
+  none: "No data yet",
+};
 const fmt = (n) => (n === undefined || n === null ? "-" : Number(n).toLocaleString());
 
 function SectionHead({ title, subtitle }) {
@@ -75,6 +83,21 @@ function Progress({ pct }) {
         <div className="h-full rounded-full" style={{ width: `${Math.min(pct ?? 0, 100)}%`, backgroundColor: PROGRESS[key].color }} />
       </div>
     </div>
+  );
+}
+
+/* A project's projected outlook: a pill with the verdict */
+function OutlookPill({ pct }) {
+  const key = progressOf(pct ?? null);
+  const color = PROGRESS[key].color;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{ backgroundColor: `${color}1F`, color: key === "none" ? "#475467" : color }}
+    >
+      <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+      {OUTLOOK[key]}
+    </span>
   );
 }
 
@@ -399,6 +422,22 @@ function PortfolioView() {
   const sharedCount = projects.filter((p) => p.shared).length;
   const pendingCount = projects.reduce((n, p) => n + (p.pending || 0), 0);
 
+  /* Projects ranked by where they are heading, the least likely to meet their targets first */
+  const outlookRows = useMemo(
+    () =>
+      projects
+        .filter((p) => (p.outlook?.total ?? 0) > 0)
+        .sort((a, b) => (a.projectedPct ?? 999) - (b.projectedPct ?? 999) || a.name.localeCompare(b.name)),
+    [projects]
+  );
+  const ratedProjects = outlookRows.filter((p) => p.projectedPct !== null && p.projectedPct !== undefined);
+  const portfolioPct = ratedProjects.length
+    ? Math.round(ratedProjects.reduce((n, p) => n + p.projectedPct, 0) / ratedProjects.length)
+    : null;
+  const outlookCounts = Object.fromEntries(
+    ["on", "risk", "off", "none"].map((k) => [k, outlookRows.filter((p) => progressOf(p.projectedPct ?? null) === k).length])
+  );
+
   /* Existing values for each field, offered as suggestions so spellings stay consistent */
   const suggestions = useMemo(
     () =>
@@ -577,7 +616,7 @@ function PortfolioView() {
         <div className="px-6 pt-6">
           <SectionHead
             title="Awaiting approval"
-            subtitle="Values staff have reported, with the evidence they attached. Open the evidence before you decide. Approving a value locks it and adds it to the results. Rejecting it lets staff report it again."
+            subtitle="Values staff have reported, with the evidence they attached. Open the evidence before you decide. A value cannot be approved without evidence. Approving a value locks it and adds it to the results. Rejecting it lets staff report it again."
           />
         </div>
         {pendingValues.length === 0 ? (
@@ -597,62 +636,172 @@ function PortfolioView() {
                 </tr>
               </thead>
               <tbody>
-                {pendingValues.map((v) => (
-                  <tr key={`${v.frameworkId}-${v.indicatorId}-${v.period}`} className="border-t border-[#F2F4F7]">
-                    <td className="px-6 py-3.5">
-                      <p className="font-medium text-[#101828]">{v.indicatorName}</p>
-                      <p className="mt-0.5 text-xs text-[#667085]">
-                        {v.frameworkName}
-                        {v.submittedBy ? `, reported by ${v.submittedBy}` : ""}
-                      </p>
-                    </td>
-                    <td className="px-3 py-3.5 text-[#475467]">{v.period}</td>
-                    <td className="px-3 py-3.5 text-right tabular-nums text-[#101828]">
-                      {fmt(v.actual)} {v.unit && <span className="text-xs text-[#667085]">{v.unit}</span>}
-                    </td>
-                    <td className="px-3 py-3.5 text-right tabular-nums text-[#475467]">{fmt(v.target)}</td>
-                    <td className="max-w-[280px] px-3 py-3.5 text-[#475467]">
-                      <p>{v.comment || "No comment"}</p>
-                      {(v.evidence ?? []).length > 0 ? (
-                        <ul className="mt-2 space-y-1">
-                          {v.evidence.map((e, i) => (
-                            <li key={`${e.type}-${e.key || e.url}-${i}`} className="flex items-center gap-1.5">
-                              <span className="rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]">
-                                {e.type === "file" ? "File" : "Link"}
-                              </span>
-                              <button
-                                type="button"
-                                className="min-w-0 truncate text-left text-xs font-medium text-[#00664E] hover:underline"
-                                title={e.name}
-                                onClick={() => openEvidence(v, e)}
-                              >
-                                {e.name}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="mt-1 text-xs text-[#98A2B3]">No evidence attached</p>
-                      )}
-                    </td>
-                    <td className="px-6 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <button type="button" className={BTN} disabled={busy} onClick={() => review(v, true)}
-                          aria-label={`Approve ${v.indicatorName} for ${v.period}`}>
-                          Approve
-                        </button>
-                        <button type="button" className={BTN_SM} disabled={busy} onClick={() => review(v, false)}
-                          aria-label={`Reject ${v.indicatorName} for ${v.period}`}>
-                          Reject
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {pendingValues.map((v) => {
+                  const hasEvidence = (v.evidence ?? []).length > 0;
+                  return (
+                    <tr key={`${v.frameworkId}-${v.indicatorId}-${v.period}`} className="border-t border-[#F2F4F7] align-top">
+                      <td className="px-6 py-3.5">
+                        <p className="font-medium text-[#101828]">
+                          {v.indicatorName}
+                          {v.correction && (
+                            <span className="ml-2 rounded-full bg-[#FBF3D0] px-2 py-0.5 text-[11px] font-semibold text-[#7A5C00]">Correction</span>
+                          )}
+                        </p>
+                        <p className="mt-0.5 text-xs text-[#667085]">
+                          {v.frameworkName}
+                          {v.submittedBy ? `, reported by ${v.submittedBy}` : ""}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3.5 text-[#475467]">{v.period}</td>
+                      <td className="px-3 py-3.5 text-right tabular-nums text-[#101828]">
+                        {fmt(v.actual)} {v.unit && <span className="text-xs text-[#667085]">{v.unit}</span>}
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums text-[#475467]">{fmt(v.target)}</td>
+                      <td className="max-w-[300px] px-3 py-3.5 text-[#475467]">
+                        <p>{v.comment || "No comment"}</p>
+
+                        {v.correction && (
+                          <div className="mt-2 rounded-md border border-[#F3D18A] bg-[#FFFAEB] px-3 py-2 text-xs text-[#7A5C00]">
+                            <p className="font-semibold">
+                              Correction by {v.correction.requestedBy || "staff"}. Approved value was {fmt(v.correction.previousActual)}.
+                            </p>
+                            <p className="mt-1 text-[#5C4600]">{v.correction.note}</p>
+                          </div>
+                        )}
+
+                        {hasEvidence ? (
+                          <ul className="mt-2 space-y-1">
+                            {v.evidence.map((e, i) => (
+                              <li key={`${e.type}-${e.key || e.url}-${i}`} className="flex items-center gap-1.5">
+                                <span className="rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]">
+                                  {e.type === "file" ? "File" : "Link"}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="min-w-0 truncate text-left text-xs font-medium text-[#00664E] hover:underline"
+                                  title={e.name}
+                                  onClick={() => openEvidence(v, e)}
+                                >
+                                  {e.name}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-1 text-xs text-[#B54708]">No evidence attached. It cannot be approved without evidence.</p>
+                        )}
+                      </td>
+                      <td className="px-6 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className={BTN}
+                            disabled={busy || !hasEvidence}
+                            title={hasEvidence ? undefined : "Evidence is required before a value can be approved"}
+                            onClick={() => review(v, true)}
+                            aria-label={`Approve ${v.indicatorName} for ${v.period}`}
+                          >
+                            Approve
+                          </button>
+                          <button type="button" className={BTN_SM} disabled={busy} onClick={() => review(v, false)}
+                            aria-label={`Reject ${v.indicatorName} for ${v.period}`}>
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
+      </section>
+
+      {/* Where each project is heading */}
+      <section aria-label="Project outlook" className={`${CARD} overflow-hidden`}>
+        <div className="px-6 pt-6">
+          <SectionHead
+            title="Project outlook"
+            subtitle={`Where each ${P} is heading by its last quarter, from approved values. The ${PS} least likely to meet their targets come first.`}
+          />
+
+          {outlookRows.length > 0 && (
+            <div className="mb-5 flex flex-wrap items-center gap-x-8 gap-y-3 rounded-lg bg-[#F9FAFB] px-5 py-4">
+              <div>
+                <p className="text-xs font-medium text-[#667085]">Portfolio outlook</p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums text-[#101828]">
+                  {portfolioPct === null ? "-" : `${portfolioPct}%`}
+                </p>
+              </div>
+              <p className="min-w-[240px] flex-1 text-sm leading-6 text-[#475467]">
+                {portfolioPct === null
+                  ? `No ${P} has approved data yet, so the portfolio cannot be projected.`
+                  : `Averaging ${ratedProjects.length} of ${outlookRows.length} ${outlookRows.length === 1 ? P : PS} with approved data, the portfolio is on course to reach about ${portfolioPct}% of its targets. ${outlookCounts.on} on course, ${outlookCounts.risk} at risk, ${outlookCounts.off} unlikely to meet their targets${outlookCounts.none ? `, ${outlookCounts.none} with no data yet` : ""}.`}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {outlookRows.length === 0 ? (
+          <p className="px-6 pb-8 text-center text-sm text-[#667085]">No {PS} have indicators with quarterly targets yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-sm">
+              <caption className="sr-only">Projected outlook by {P}</caption>
+              <thead>
+                <tr className="text-xs font-medium text-[#667085]">
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">{LABELS.project}</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Projected share of targets</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Outlook</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-3 py-3">Indicators</th>
+                  <th scope="col" className="border-y border-[#E5E7EB] bg-[#F9FAFB] px-6 py-3">Ends</th>
+                </tr>
+              </thead>
+              <tbody>
+                {outlookRows.map((p) => {
+                  const key = progressOf(p.projectedPct ?? null);
+                  const o = p.outlook;
+                  return (
+                    <tr key={p.id} className="border-t border-[#F2F4F7]">
+                      <td className="px-6 py-3.5">
+                        <p className="font-medium text-[#101828]">{p.name}</p>
+                        <p className="mt-0.5 text-xs text-[#667085]">
+                          {p.donor || NOT_SET}
+                          {!p.shared && <span className="ml-2 rounded bg-[#F2F4F7] px-1.5 py-0.5 text-[11px] font-medium text-[#475467]">Not shared</span>}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3.5">
+                        <div className="w-44">
+                          <p className="text-lg font-semibold tabular-nums text-[#101828]">
+                            {p.projectedPct === null || p.projectedPct === undefined ? "-" : `${p.projectedPct}%`}
+                          </p>
+                          <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EEF0F4]" aria-hidden="true">
+                            <div className="h-full rounded-full" style={{ width: `${Math.min(p.projectedPct ?? 0, 100)}%`, backgroundColor: PROGRESS[key].color }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3.5"><OutlookPill pct={p.projectedPct ?? null} /></td>
+                      <td className="px-3 py-3.5">
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[#475467]">
+                          {o.on > 0 && <span><span className="font-semibold tabular-nums text-[#1F7A5C]">{o.on}</span> on course</span>}
+                          {o.risk > 0 && <span><span className="font-semibold tabular-nums text-[#9A6B00]">{o.risk}</span> at risk</span>}
+                          {o.off > 0 && <span><span className="font-semibold tabular-nums text-[#B42318]">{o.off}</span> unlikely</span>}
+                          {o.none > 0 && <span><span className="font-semibold tabular-nums text-[#667085]">{o.none}</span> no data</span>}
+                        </div>
+                      </td>
+                      <td className="px-6 py-3.5 text-[#475467]">{fmtDay(p.endDate) || NOT_SET}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="px-6 pb-6 pt-4 text-xs text-[#98A2B3]">
+          Each {P}'s outlook averages its indicators' projected percentage of target, so different units do not matter. Every indicator counts up to 100%, so over-achieving on one does not hide a shortfall on another. It uses the same method as the Predictions page: approved results so far, plus each remaining quarterly target at the pace reached so far. Values awaiting approval are not counted. It assumes higher is better and is a guide, not a promise.
+        </p>
       </section>
 
       <section aria-label="Strategic indicators" className={`${CARD} p-6`}>
