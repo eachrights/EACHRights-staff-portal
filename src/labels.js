@@ -4,10 +4,10 @@
  * the same thing for now, and "projects" are called initiatives.
  */
 export const LABELS = {
-  project: "Initiative",
-  projects: "Initiatives",
-  projectLower: "initiative",
-  projectsLower: "initiatives",
+  project: "Project",
+  projects: "Projects",
+  projectLower: "project",
+  projectsLower: "projects",
   programme: "Thematic area",
   programmes: "Thematic areas",
   programmeReport: "Thematic area report",

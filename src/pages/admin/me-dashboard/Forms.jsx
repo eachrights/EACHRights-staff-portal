@@ -8,10 +8,18 @@ import {
    Each indicator can also be broken down (by sex, age group and so on) using the
    disaggregation types the administrator has set up, and can carry evidence
    (uploaded files and links) that backs up the reported value.
+   Count indicators are reported as activity entries (one per training, with its own date,
+   number, breakdown, note and evidence); the period's actual is the total of the entries.
    An approved value is locked, but it can be corrected: the correction needs a note for the
-   administrator, and goes back to "awaiting approval". */
+   administrator, and goes back to "awaiting approval". Adding an entry to an approved value
+   opens the correction automatically. */
 
 const isEmpty = (v) => v === "" || v === undefined || v === null;
+
+/* Count indicators get activity entries; percentages can't be added up, so they keep a single value.
+   Uses the indicator's format, the same way the API does. */
+const isCount = (ind) =>
+  (ind.format || (/%|percent/i.test(ind.unit || "") ? "Percentage" : "Numeric")) === "Numeric";
 
 /* Recognise a configured gender/sex disaggregation without assuming its ID or categories. */
 const isGenderType = (type) =>
@@ -75,6 +83,47 @@ function breakdownPayload(draft, types) {
   return out;
 }
 
+/* ---------- Activity entries ---------- */
+
+const newEntry = (patch = {}) => ({
+  id: crypto.randomUUID(), date: "", count: "", breakdown: {}, note: "", evidence: [], ...patch,
+});
+
+const entriesTotal = (entries) =>
+  entries.reduce((s, e) => s + (isEmpty(e.count) ? 0 : Number(e.count)), 0);
+
+/* Period breakdown = sum of the entry breakdowns, so the API's add-up check still holds */
+function aggregateBreakdown(entries, types) {
+  const out = {};
+  for (const t of types) {
+    const totals = {};
+    for (const e of entries)
+      for (const c of t.categories) {
+        const v = e.breakdown?.[t.id]?.[c];
+        if (!isEmpty(v)) totals[c] = (totals[c] || 0) + Number(v);
+      }
+    if (Object.keys(totals).length) out[t.id] = totals;
+  }
+  return out;
+}
+
+function entriesProblem(entries, types) {
+  if (entries.length === 0) return "add at least one entry.";
+  for (const [i, e] of entries.entries()) {
+    const label = `Entry ${i + 1}`;
+    if (!e.legacy && !e.date) return `${label}: choose a date.`;
+    if (isEmpty(e.count) || Number.isNaN(Number(e.count)) || Number(e.count) < 0) return `${label}: enter the number of people.`;
+    const p = breakdownProblem({ actual: e.count, breakdown: e.breakdown }, types);
+    if (p) return `${label}: ${p}`;
+  }
+  const total = entriesTotal(entries);
+  const p = breakdownProblem({ actual: total, breakdown: aggregateBreakdown(entries, types) }, types);
+  return p ? `fill the same breakdown on every entry, or on none. ${p}` : "";
+}
+
+/* Evidence upload/link state is keyed per indicator, and per entry when there is one */
+const evKey = (ind, entryId) => `${ind.id}:${entryId || "q"}`;
+
 function MEForms() {
   const { isAdmin, canEnter, frameworks, selectedId, setSelectedId, data, fw, ordered, rows, period, setPeriod, busy, error, run, reload } = useMEData();
   const [drafts, setDrafts] = useState({});
@@ -132,6 +181,15 @@ function MEForms() {
       comment: saved?.comment ?? "",
       breakdown: saved?.breakdown ?? {},
       evidence: saved?.evidence ?? [],
+      entries: (saved?.entries ?? []).map((e) => ({
+        breakdown: {},
+        evidence: [],
+        note: "",
+        ...e,
+        date: e.date ?? "",
+        legacy: !e.date,
+        count: String(e.count ?? ""),
+      })),
       correctionNote: "",
     };
   const setDraft = (ind, saved, patch) =>
@@ -146,6 +204,20 @@ function MEForms() {
       breakdown: next,
       ...(driver ? { actual: String(sumOf(next[driver.id], driver)) } : {}),
     });
+  };
+
+  /* Every entry change recomputes the period's Actual: nobody adds by hand */
+  const updateEntries = (ind, saved, entries) =>
+    setDraft(ind, saved, { entries, actual: entries.length ? String(entriesTotal(entries)) : "" });
+
+  const patchEntry = (ind, saved, id, patch) =>
+    updateEntries(ind, saved, draftFor(ind, saved).entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+
+  const setEntryCell = (ind, saved, id, typeId, category, value) => {
+    const entry = draftFor(ind, saved).entries.find((e) => e.id === id);
+    const next = { ...entry.breakdown, [typeId]: { ...(entry.breakdown[typeId] || {}), [category]: value } };
+    const driver = driverType(next, types);
+    patchEntry(ind, saved, id, { breakdown: next, ...(driver ? { count: String(sumOf(next[driver.id], driver)) } : {}) });
   };
 
   /* An approved value is only included once the person has chosen to correct it */
@@ -174,28 +246,52 @@ function MEForms() {
     });
   };
 
-  /* ---------- Evidence ---------- */
+  /* ---------- Entries: add and remove ---------- */
 
-  const addEvidence = (ind, saved, item) => {
-    const current = draftFor(ind, saved).evidence || [];
-    if (current.length >= MAX_EVIDENCE) throw new Error(`A value can have at most ${MAX_EVIDENCE} pieces of evidence.`);
-    setDraft(ind, saved, { evidence: [...current, item] });
+  const addEntry = (ind, saved) => {
+    const d = draftFor(ind, saved);
+    /* Adding to an approved value opens the correction flow automatically */
+    if (saved?.status === "approved" && !correcting[ind.id]) startCorrection(ind);
+    /* A value that already has a plain total keeps it as an opening entry, so it isn't overwritten */
+    const seed =
+      d.entries.length === 0 && !isEmpty(saved?.actual)
+        ? [newEntry({ legacy: true, count: String(saved.actual), note: "Total entered before activity entries" })]
+        : [];
+    updateEntries(ind, saved, [...d.entries, ...seed, newEntry()]);
   };
 
-  const removeEvidence = (ind, saved, index) =>
-    setDraft(ind, saved, { evidence: (draftFor(ind, saved).evidence || []).filter((_, i) => i !== index) });
+  const removeEntry = (ind, saved, id) =>
+    updateEntries(ind, saved, draftFor(ind, saved).entries.filter((e) => e.id !== id));
+
+  /* ---------- Evidence (on the value itself, or on one entry) ---------- */
+
+  const getEvidence = (ind, saved, entryId) => {
+    const d = draftFor(ind, saved);
+    return (entryId ? d.entries.find((e) => e.id === entryId)?.evidence : d.evidence) || [];
+  };
+  const setEvidence = (ind, saved, entryId, list) =>
+    entryId ? patchEntry(ind, saved, entryId, { evidence: list }) : setDraft(ind, saved, { evidence: list });
+
+  const addEvidence = (ind, saved, item, entryId) => {
+    const current = getEvidence(ind, saved, entryId);
+    if (current.length >= MAX_EVIDENCE) throw new Error(`A value can have at most ${MAX_EVIDENCE} pieces of evidence.`);
+    setEvidence(ind, saved, entryId, [...current, item]);
+  };
+
+  const removeEvidence = (ind, saved, index, entryId) =>
+    setEvidence(ind, saved, entryId, getEvidence(ind, saved, entryId).filter((_, i) => i !== index));
 
   /* Upload straight to storage with a short-lived link from the API, then attach the file to the value */
-  const uploadFile = (ind, saved, file) =>
+  const uploadFile = (ind, saved, file, entryId) =>
     run(async () => {
       if (!file) return;
       const contentType = contentTypeOf(file);
       if (!contentType) throw new Error("Use a PDF, JPG, PNG, CSV, Word or Excel file.");
       if (file.size > MAX_FILE_BYTES) throw new Error("Files must be 10 MB or smaller.");
-      if ((draftFor(ind, saved).evidence || []).length >= MAX_EVIDENCE) {
+      if (getEvidence(ind, saved, entryId).length >= MAX_EVIDENCE) {
         throw new Error(`A value can have at most ${MAX_EVIDENCE} pieces of evidence.`);
       }
-      setUploading(ind.id);
+      setUploading(evKey(ind, entryId));
       try {
         const { url, key } = await api(`/me/frameworks/${selectedId}/evidence/upload-url`, {
           method: "POST",
@@ -203,15 +299,16 @@ function MEForms() {
         });
         const res = await fetch(url, { method: "PUT", headers: { "Content-Type": contentType }, body: file });
         if (!res.ok) throw new Error("The file could not be uploaded. Try again.");
-        addEvidence(ind, saved, { type: "file", name: file.name, key });
+        addEvidence(ind, saved, { type: "file", name: file.name, key }, entryId);
       } finally {
         setUploading(null);
       }
     });
 
-  const addLink = (ind, saved) =>
+  const addLink = (ind, saved, entryId) =>
     run(async () => {
-      const entry = links[ind.id] || { name: "", url: "" };
+      const k = evKey(ind, entryId);
+      const entry = links[k] || { name: "", url: "" };
       let url;
       try {
         url = new URL(entry.url.trim());
@@ -219,8 +316,8 @@ function MEForms() {
         throw new Error("Enter a valid link, starting with https://");
       }
       if (url.protocol !== "https:") throw new Error("Links must start with https://");
-      addEvidence(ind, saved, { type: "link", name: entry.name.trim() || url.hostname, url: url.toString() });
-      setLinks((cur) => ({ ...cur, [ind.id]: { name: "", url: "" } }));
+      addEvidence(ind, saved, { type: "link", name: entry.name.trim() || url.hostname, url: url.toString() }, entryId);
+      setLinks((cur) => ({ ...cur, [k]: { name: "", url: "" } }));
     });
 
   /* Files open through a short-lived link, so they stay private */
@@ -248,8 +345,9 @@ function MEForms() {
   /*
    * Values are saved one at a time. If one fails, the values that already went
    * through are cleared from the drafts and the data is reloaded, so a retry
-   * only sends what is still unsaved. Breakdowns and correction notes are checked
-   * first, so a mistake is caught before anything is sent.
+   * only sends what is still unsaved. Entries, breakdowns and correction notes are
+   * checked first, so a mistake is caught before anything is sent.
+   * A count indicator that has no entries yet (an older plain total) is saved as before.
    */
   const submitAll = () =>
     run(async () => {
@@ -257,7 +355,7 @@ function MEForms() {
 
       for (const { ind, saved } of pending) {
         const d = draftFor(ind, saved);
-        const problem = breakdownProblem(d, types);
+        const problem = isCount(ind) && d.entries.length > 0 ? entriesProblem(d.entries, types) : breakdownProblem(d, types);
         if (problem) throw new Error(`${ind.name}: ${problem}`);
         if (saved?.status === "approved" && !d.correctionNote.trim()) {
           throw new Error(`${ind.name}: write a note for the administrator explaining the correction.`);
@@ -268,7 +366,20 @@ function MEForms() {
       try {
         for (const { ind, saved } of pending) {
           const d = draftFor(ind, saved);
-          const breakdown = breakdownPayload(d, types);
+          const counted = isCount(ind) && d.entries.length > 0;
+          const entries = counted
+            ? d.entries.map((e) => ({
+                id: e.id,
+                date: e.date || null,
+                count: Number(e.count),
+                note: e.note.trim(),
+                evidence: e.evidence,
+                breakdown: breakdownPayload(e, types),
+              }))
+            : null;
+          const breakdown = counted ? aggregateBreakdown(d.entries, types) : breakdownPayload(d, types);
+          /* The period's evidence is the entries' evidence, so "no approval without evidence" keeps working */
+          const evidence = counted ? d.entries.flatMap((e) => e.evidence) : d.evidence || [];
           await api(`/me/frameworks/${selectedId}/values`, {
             method: "PUT",
             body: {
@@ -276,9 +387,10 @@ function MEForms() {
               period,
               actual: d.actual,
               comment: d.comment,
-              evidence: d.evidence || [],
+              evidence,
               ...(saved?.status === "approved" ? { correctionNote: d.correctionNote.trim() } : {}),
               ...(Object.keys(breakdown).length ? { breakdown } : {}),
+              ...(entries ? { entries } : {}),
             },
           });
           savedIds.push(ind.id);
@@ -350,11 +462,12 @@ function MEForms() {
     );
   };
 
-  /* The evidence list and the controls to add to it */
-  const renderEvidence = (ind, saved, disabled) => {
-    const list = draftFor(ind, saved).evidence || [];
-    const link = links[ind.id] || { name: "", url: "" };
-    const isUploading = uploading === ind.id;
+  /* The evidence list and the controls to add to it (for the value itself, or for one entry) */
+  const renderEvidence = (ind, saved, disabled, entryId) => {
+    const list = getEvidence(ind, saved, entryId);
+    const k = evKey(ind, entryId);
+    const link = links[k] || { name: "", url: "" };
+    const isUploading = uploading === k;
     const full = list.length >= MAX_EVIDENCE;
     return (
       <div className="mt-3 space-y-3 rounded-lg bg-[#F9FAFB] p-4">
@@ -378,7 +491,7 @@ function MEForms() {
                   <button
                     type="button"
                     className={SMALL_DANGER}
-                    onClick={() => removeEvidence(ind, saved, i)}
+                    onClick={() => removeEvidence(ind, saved, i, entryId)}
                     aria-label={`Remove ${item.name}`}
                   >
                     Remove
@@ -407,7 +520,7 @@ function MEForms() {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
-                    uploadFile(ind, saved, file);
+                    uploadFile(ind, saved, file, entryId);
                   }}
                 />
               </label>
@@ -418,7 +531,7 @@ function MEForms() {
                 aria-label={`Link name for ${ind.name}`}
                 placeholder="Name"
                 value={link.name}
-                onChange={(e) => setLinks((cur) => ({ ...cur, [ind.id]: { ...link, name: e.target.value } }))}
+                onChange={(e) => setLinks((cur) => ({ ...cur, [k]: { ...link, name: e.target.value } }))}
               />
               <input
                 type="url"
@@ -426,10 +539,10 @@ function MEForms() {
                 aria-label={`Link address for ${ind.name}`}
                 placeholder="https://"
                 value={link.url}
-                onChange={(e) => setLinks((cur) => ({ ...cur, [ind.id]: { ...link, url: e.target.value } }))}
-                onKeyDown={(e) => e.key === "Enter" && link.url && !full && addLink(ind, saved)}
+                onChange={(e) => setLinks((cur) => ({ ...cur, [k]: { ...link, url: e.target.value } }))}
+                onKeyDown={(e) => e.key === "Enter" && link.url && !full && addLink(ind, saved, entryId)}
               />
-              <button type="button" className={SMALL} disabled={!link.url.trim() || full || busy} onClick={() => addLink(ind, saved)}>
+              <button type="button" className={SMALL} disabled={!link.url.trim() || full || busy} onClick={() => addLink(ind, saved, entryId)}>
                 Add link
               </button>
             </div>
@@ -438,6 +551,106 @@ function MEForms() {
         <p className="text-xs text-[#98A2B3]">
           PDF, JPG, PNG, CSV, Word or Excel, up to 10 MB each. Evidence is saved when you submit the value. The administrator cannot approve a value without evidence.
         </p>
+      </div>
+    );
+  };
+
+  /* The activity entries for one count indicator.
+     canAdd: the person may add entries (adding to a locked value opens the correction).
+     readOnly: the fields are locked (approved and not being corrected). */
+  const renderEntries = (ind, saved, canAdd, readOnly) => {
+    const { entries } = draftFor(ind, saved);
+    const noun = ind.activityLabel || "training";
+    const Noun = noun[0].toUpperCase() + noun.slice(1);
+    const total = entriesTotal(entries);
+    const dis = !canAdd || readOnly || busy;
+    return (
+      <div className="mt-3 space-y-3 rounded-lg bg-[#F9FAFB] p-4">
+        {entries.length === 0 && <p className="text-xs text-[#98A2B3]">No {noun}s yet</p>}
+        {entries.map((e, i) => {
+          const driver = driverType(e.breakdown, types);
+          return (
+            <div key={e.id} className="rounded-lg border border-[#EAECF0] bg-white p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-[#344054]">{Noun} {i + 1}</p>
+                {!dis && (
+                  <button
+                    type="button"
+                    className={SMALL_DANGER}
+                    disabled={busy}
+                    aria-label={`Remove ${noun} ${i + 1} for ${ind.name}`}
+                    onClick={() => removeEntry(ind, saved, e.id)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-[10rem_8rem_minmax(0,1fr)]">
+                <input
+                  type="date"
+                  className={FIELD}
+                  disabled={dis}
+                  value={e.date}
+                  max={new Date().toISOString().slice(0, 10)}
+                  aria-label={`Date of ${noun} ${i + 1} for ${ind.name}`}
+                  onChange={(ev) => patchEntry(ind, saved, e.id, { date: ev.target.value })}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  className={`${FIELD} ${driver ? "bg-[#F4F5F7]" : ""}`}
+                  placeholder="People"
+                  disabled={dis}
+                  readOnly={Boolean(driver)}
+                  value={e.count}
+                  aria-label={`Number of people at ${noun} ${i + 1} for ${ind.name}`}
+                  onChange={(ev) => patchEntry(ind, saved, e.id, { count: ev.target.value })}
+                />
+                <input
+                  type="text"
+                  className={FIELD}
+                  placeholder="Note (topic, venue)"
+                  disabled={dis}
+                  value={e.note}
+                  aria-label={`Note for ${noun} ${i + 1} for ${ind.name}`}
+                  onChange={(ev) => patchEntry(ind, saved, e.id, { note: ev.target.value })}
+                />
+              </div>
+              {types.map((t) => (
+                <fieldset key={t.id} className="mt-3">
+                  <legend className="text-xs font-semibold text-[#344054]">By {t.name.toLowerCase()}</legend>
+                  <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    {t.categories.map((c) => (
+                      <label key={c} className="block text-xs text-[#667085]">
+                        {c}
+                        <input
+                          type="number"
+                          min="0"
+                          disabled={dis}
+                          className={`${FIELD} mt-1 w-full tabular-nums`}
+                          aria-label={`${c} (${t.name}) for ${noun} ${i + 1} of ${ind.name}`}
+                          value={e.breakdown?.[t.id]?.[c] ?? ""}
+                          onChange={(ev) => setEntryCell(ind, saved, e.id, t.id, c, ev.target.value)}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+              {renderEvidence(ind, saved, dis, e.id)}
+            </div>
+          );
+        })}
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-[#344054]">
+            {entries.length} {noun}{entries.length === 1 ? "" : "s"} · {total} people
+          </p>
+          {canAdd && (
+            <button type="button" className={SMALL} disabled={busy} onClick={() => addEntry(ind, saved)}>
+              Add {noun}
+            </button>
+          )}
+        </div>
       </div>
     );
   };
@@ -498,6 +711,8 @@ function MEForms() {
               <ul className="mt-3 divide-y divide-[#F2F4F7]">
                 {items.map(({ ind, saved, target }) => {
                   const draft = draftFor(ind, saved);
+                  const counted = isCount(ind);
+                  const noun = ind.activityLabel || "training";
                   const approved = saved?.status === "approved";
                   const isCorrecting = Boolean(correcting[ind.id]);
                   const locked = approved && !isCorrecting;
@@ -507,8 +722,12 @@ function MEForms() {
                   const isOpen = open[ind.id] ?? (hasBreakdown || hasGenderType);
                   const evidenceCount = (draft.evidence || []).length;
                   const evidenceOpen = evOpen[ind.id] ?? false;
+                  const entryCount = draft.entries.length;
                   const showEvidenceToggle = canEnter || evidenceCount > 0;
+                  const showEntriesToggle = canEnter || entryCount > 0;
                   const pendingCorrection = saved?.status === "submitted" ? saved.correction : null;
+                  const driver = driverType(draft.breakdown, types);
+                  const actualLocked = counted || Boolean(driver);
                   /* Actual over target, updating as the person types */
                   const actualNum = isEmpty(draft.actual) || Number.isNaN(Number(draft.actual)) ? null : Number(draft.actual);
                   const targetNum = Number(target);
@@ -543,7 +762,17 @@ function MEForms() {
                             {period} target · Baseline {ind.baseline ?? "-"}
                           </p>
                           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                            {types.length > 0 && (
+                            {counted && showEntriesToggle && (
+                              <button
+                                type="button"
+                                onClick={() => setEvOpen((cur) => ({ ...cur, [ind.id]: !evidenceOpen }))}
+                                aria-expanded={evidenceOpen}
+                                className="text-xs font-medium text-[#00664E] hover:underline"
+                              >
+                                {evidenceOpen ? "Hide activities" : entryCount > 0 ? `Activities (${entryCount})` : "Add activities"}
+                              </button>
+                            )}
+                            {!counted && types.length > 0 && (
                               <button
                                 type="button"
                                 onClick={() => setOpen((cur) => ({ ...cur, [ind.id]: !isOpen }))}
@@ -553,7 +782,7 @@ function MEForms() {
                                 {isOpen ? "Hide gender and other breakdowns" : hasBreakdown ? "Show gender and other breakdowns" : "Add gender and other breakdowns"}
                               </button>
                             )}
-                            {showEvidenceToggle && (
+                            {!counted && showEvidenceToggle && (
                               <button
                                 type="button"
                                 onClick={() => setEvOpen((cur) => ({ ...cur, [ind.id]: !evidenceOpen }))}
@@ -573,13 +802,19 @@ function MEForms() {
                             value={draft.actual}
                             onChange={(e) => setDraft(ind, saved, { actual: e.target.value })}
                             disabled={disabled}
-                            readOnly={Boolean(driverType(draft.breakdown, types))}
-                            className={`${FIELD} w-full ${driverType(draft.breakdown, types) ? "bg-[#F4F5F7]" : ""}`}
+                            readOnly={actualLocked}
+                            className={`${FIELD} w-full ${actualLocked ? "bg-[#F4F5F7]" : ""}`}
                           />
-                          {driverType(draft.breakdown, types) && (
+                          {counted ? (
                             <p className="mt-1 text-[11px] leading-tight text-[#667085]">
-                              Total of {driverType(draft.breakdown, types).name.toLowerCase()}. Clear it to type a value.
+                              Total of {entryCount} {noun}{entryCount === 1 ? "" : "s"}.
                             </p>
+                          ) : (
+                            driver && (
+                              <p className="mt-1 text-[11px] leading-tight text-[#667085]">
+                                Total of {driver.name.toLowerCase()}. Clear it to type a value.
+                              </p>
+                            )
                           )}
                         </div>
                         <input
@@ -636,8 +871,9 @@ function MEForms() {
                         </div>
                       )}
 
-                      {isOpen && types.length > 0 && renderBreakdown(ind, saved, disabled)}
-                      {evidenceOpen && showEvidenceToggle && renderEvidence(ind, saved, disabled)}
+                      {counted && evidenceOpen && showEntriesToggle && renderEntries(ind, saved, canEnter, locked)}
+                      {!counted && isOpen && types.length > 0 && renderBreakdown(ind, saved, disabled)}
+                      {!counted && evidenceOpen && showEvidenceToggle && renderEvidence(ind, saved, disabled)}
                     </li>
                   );
                 })}
