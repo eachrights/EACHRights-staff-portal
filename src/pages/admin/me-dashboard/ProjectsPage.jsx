@@ -65,16 +65,32 @@ const SORTS = {
 
 /* ---------- Small shared pieces ---------- */
 
-function Tile({ label, value, note, color }) {
-  return (
-    <div className={`${CARD} p-5`}>
+/* A summary tile. Give it onClick and it becomes a button (used to filter the list). */
+function Tile({ label, value, note, color, onClick, active = false }) {
+  const body = (
+    <>
       <p className="text-[13px] font-medium text-[#667085]">{label}</p>
       <p className="mt-1 flex items-center gap-2 text-3xl font-semibold tracking-tight tabular-nums text-[#101828]">
         {color && <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />}
         {value}
       </p>
       {note && <p className="mt-1 text-[13px] text-[#667085]">{note}</p>}
-    </div>
+    </>
+  );
+
+  if (!onClick) return <div className={`${CARD} p-5`}>{body}</div>;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`${CARD} w-full p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5B3FD0] motion-reduce:hover:translate-y-0 ${
+        active ? "ring-2 ring-[#5B3FD0]" : ""
+      }`}
+    >
+      {body}
+    </button>
   );
 }
 
@@ -224,6 +240,9 @@ function ProjectList({ onOpen }) {
   const filtered = stateFilter !== "all" || areaFilter || query.trim();
   const missingDates = frameworks && frameworks.length > 0 && frameworks.some((f) => !f.startDate || !f.endDate);
 
+  /* Clicking a tile filters the list to it. Clicking the tile that is already on shows everything again. */
+  const pickState = (id) => setStateFilter((cur) => (cur === id ? "all" : id));
+
   return (
     <Page>
       <PageHead title={LABELS.projects} subtitle={`All ${LABELS.projectsLower}, from current to previous.`}>
@@ -234,13 +253,40 @@ function ProjectList({ onOpen }) {
 
       <ErrorBar error={error} />
 
-      {/* Summary */}
+      {/* Summary: each tile filters the list below */}
       {frameworks && (
         <section aria-label={`${LABELS.project} summary`} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Tile label={`All ${LABELS.projectsLower}`} value={counts.all} note={`Across every ${LABELS.programme.toLowerCase()}`} />
-          <Tile label="Current" value={counts.current} color={DOT.current} note="Running today" />
-          <Tile label="Upcoming" value={counts.upcoming} color={DOT.upcoming} note="Not started yet" />
-          <Tile label="Previous" value={counts.past} color={DOT.past} note="Already ended" />
+          <Tile
+            label={`All ${LABELS.projectsLower}`}
+            value={counts.all}
+            note={`Across every ${LABELS.programme.toLowerCase()}`}
+            active={stateFilter === "all"}
+            onClick={() => setStateFilter("all")}
+          />
+          <Tile
+            label="Current"
+            value={counts.current}
+            color={DOT.current}
+            note="Running today"
+            active={stateFilter === "current"}
+            onClick={() => pickState("current")}
+          />
+          <Tile
+            label="Upcoming"
+            value={counts.upcoming}
+            color={DOT.upcoming}
+            note="Not started yet"
+            active={stateFilter === "upcoming"}
+            onClick={() => pickState("upcoming")}
+          />
+          <Tile
+            label="Previous"
+            value={counts.past}
+            color={DOT.past}
+            note="Already ended"
+            active={stateFilter === "past"}
+            onClick={() => pickState("past")}
+          />
         </section>
       )}
 

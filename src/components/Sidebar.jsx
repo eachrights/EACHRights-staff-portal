@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
-  Folder,
   FolderOpen,
   ChevronDown,
   Users,
@@ -25,6 +24,14 @@ import {
   TrendingUp,
   BookOpen,
   Home,
+  ListChecks,
+  CalendarDays,
+  CalendarCheck,
+  History,
+  Plane,
+  Layers,
+  Building2,
+  Landmark,
 } from "lucide-react";
 
 import {
@@ -36,10 +43,18 @@ import {
 import { LABELS } from "../labels";
 
 /*
- * File-tree navigation. Every href must match a <Route> in App.jsx.
+ * Navigation. Every href must match a <Route> in App.jsx.
  * Thematic areas open on the Programs page through ?area=<slug>.
  * People only see the departments (Cognito groups "dept-<slug>") they belong to.
+ *
+ * Layout, top to bottom:
+ *   Home
+ *   My workplace          Attendance and leave, Travel
+ *   Programmes & results  M&E (collapsible)
+ *   Files                 All files, Programmes, Departments, Finance
+ *   Administration        (administrator only)
  */
+
 /* Shown to the administrator only */
 const ADMIN_LINKS = [
   { name: "Staff users", href: "/admin/users", icon: Users },
@@ -74,6 +89,14 @@ const ME_GROUPS = [
     ],
   },
   {
+    label: "Planning",
+    items: [
+      { name: "Workplan", href: "/me-dashboard/workplan", icon: ListChecks },
+      { name: "Calendar", href: "/me-dashboard/calendar", icon: CalendarDays },
+      { name: "Audit trail", href: "/me-dashboard/audit", icon: History, adminOnly: true },
+    ],
+  },
+  {
     label: "Intelligence",
     items: [
       { name: "AI insights", href: "/me-dashboard/insights", icon: Sparkles, badge: "New" },
@@ -84,10 +107,7 @@ const ME_GROUPS = [
   },
 ];
 
-/*
- * Folder colours, matching the dashboard. These are the deeper tints so they
- * stay readable on the light sidebar.
- */
+/* Dot colours for programme areas and departments, matching the dashboard */
 const AREA_COLORS = {
   finance: "#0F9F77",
   "education-justice": "#E8870A",
@@ -101,53 +121,152 @@ const AREA_COLORS = {
   "business-human-rights": "#E5601F",
 };
 
-const DEFAULT_FOLDER_COLOR = "#E8870A";
+const DEFAULT_DOT_COLOR = "#98A2B3";
 
 const FOCUS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#008060]";
 
-function FolderIcon({ size = 18, color = DEFAULT_FOLDER_COLOR }) {
+/* green is the portal colour, purple is used by the M&E section to match the M&E dashboard */
+const TONES = {
+  green: {
+    active: "bg-[#E9F5F0] text-[#00664E] before:bg-[#008060]",
+    icon: "text-[#008060]",
+    text: "text-[#00664E]",
+  },
+  purple: {
+    active: "bg-[#EEEAFB] text-[#5B3FD0] before:bg-[#5B3FD0]",
+    icon: "text-[#5B3FD0]",
+    text: "text-[#5B3FD0]",
+  },
+};
+
+const ICON_STROKE = 1.75;
+
+function SectionLabel({ children }) {
   return (
-    <Folder
-      size={size}
-      className="shrink-0"
-      style={{ color, fill: `${color}40` }}
+    <p className="px-3 pb-1.5 pt-5 text-[11px] font-semibold uppercase tracking-wider text-[#98A2B3]">
+      {children}
+    </p>
+  );
+}
+
+function Dot({ color = DEFAULT_DOT_COLOR }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="ml-1 mr-0.5 h-2 w-2 shrink-0 rounded-full"
+      style={{ backgroundColor: color }}
     />
   );
 }
 
-/* tone="purple" is used by the M&E section to match the M&E dashboard */
-function TreeLink({ to, active, onClick, children, small = false, tone = "green" }) {
-  const activeCls =
-    tone === "purple"
-      ? "bg-[#EDE9FB] text-[#5B3FD0]"
-      : "bg-[#E3F3EC] text-[#00664E]";
+/* One navigation link. A thin bar on the left marks the page you are on. */
+function NavItem({ to, active, onClick, icon: Icon, children, tone = "green", small = false }) {
+  const t = TONES[tone];
 
   return (
     <Link
       to={to}
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 ${
-        small ? "py-2 text-[13px]" : "py-2.5 text-sm"
-      } font-medium transition motion-reduce:transition-none ${FOCUS} ${
+      className={`relative flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 font-medium transition-colors motion-reduce:transition-none ${
+        small ? "py-1.5 text-[13px]" : "py-2 text-[13.5px]"
+      } ${FOCUS} ${
         active
-          ? activeCls
-          : "text-[#475467] hover:bg-[#F3F6F5] hover:text-[#0B2B24]"
+          ? `${t.active} before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full`
+          : "text-[#475467] hover:bg-[#F4F6F5] hover:text-[#0B2B24]"
       }`}
     >
+      {Icon && (
+        <Icon
+          size={small ? 16 : 18}
+          strokeWidth={ICON_STROKE}
+          className={`shrink-0 ${active ? t.icon : "text-[#98A2B3]"}`}
+        />
+      )}
       {children}
     </Link>
   );
+}
+
+/* A row that opens and closes a group of links */
+function GroupToggle({ icon: Icon, label, open, onToggle, active, controls, tone = "green" }) {
+  const t = TONES[tone];
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={controls}
+      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13.5px] font-medium transition-colors hover:bg-[#F4F6F5] motion-reduce:transition-none ${FOCUS} ${
+        active ? t.text : "text-[#475467] hover:text-[#0B2B24]"
+      }`}
+    >
+      <Icon
+        size={18}
+        strokeWidth={ICON_STROKE}
+        className={`shrink-0 ${active ? t.icon : "text-[#98A2B3]"}`}
+      />
+      <span className="flex-1 text-left">{label}</span>
+      <ChevronDown
+        size={15}
+        strokeWidth={ICON_STROKE}
+        className={`text-[#98A2B3] transition-transform motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
+      />
+    </button>
+  );
+}
+
+/* Remembers open/closed for this browser tab, so a menu does not snap shut when the sidebar is rebuilt */
+function usePersisted(key, initial) {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      return saved === null ? initial : saved === "1";
+    } catch {
+      return initial;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, value ? "1" : "0");
+    } catch {
+      // Storage can be blocked; the menu then just forgets between visits
+    }
+  }, [key, value]);
+
+  return [value, setValue];
 }
 
 function Sidebar({ mobileOpen, onClose }) {
   const { pathname, search } = useLocation();
   const activeArea = new URLSearchParams(search).get("area");
 
-  const [programsOpen, setProgramsOpen] = useState(true);
-  const [meOpen, setMeOpen] = useState(true);
+  const onHome = pathname === "/home" || pathname === "/home/";
+  const onAdminHome = pathname === "/admin" || pathname === "/admin/";
+  const onPrograms = pathname.startsWith("/admin/programs");
+  const onMe = pathname.startsWith("/me-dashboard");
+  const onAttendance = pathname.startsWith("/attendance");
+  const onTravel = pathname.startsWith("/travel");
+  const onFinance = pathname.startsWith("/admin/finance");
+
+  // Groups start closed and open by themselves when you are inside them
+  const [meOpen, setMeOpen] = usePersisted("nav-me-open", onMe);
+  const [programsOpen, setProgramsOpen] = usePersisted("nav-programmes-open", onPrograms);
+  const [deptsOpen, setDeptsOpen] = usePersisted("nav-departments-open", onPrograms);
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
+
+  useEffect(() => {
+    if (onMe) setMeOpen(true);
+  }, [onMe]);
+  useEffect(() => {
+    if (onPrograms) {
+      setProgramsOpen(true);
+      setDeptsOpen(true);
+    }
+  }, [onPrograms]);
 
   // Work out which departments this person belongs to
   useEffect(() => {
@@ -183,11 +302,6 @@ function Sidebar({ mobileOpen, onClose }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [mobileOpen, onClose]);
 
-  const onHome = pathname === "/home" || pathname === "/home/";
-  const onAdminHome = pathname === "/admin" || pathname === "/admin/";
-  const onPrograms = pathname.startsWith("/admin/programs");
-  const onMe = pathname.startsWith("/me-dashboard");
-
   /*
    * Exact match, or a real sub-path of the link. A plain startsWith would light
    * up "Data table" on /me-dashboard/data-tables, and "Forms" on
@@ -197,6 +311,9 @@ function Sidebar({ mobileOpen, onClose }) {
     pathname === href ||
     pathname === `${href}/` ||
     (href !== "/me-dashboard" && pathname.startsWith(`${href}/`));
+
+  const filesHome = isAdmin ? "/admin" : "/dashboard";
+  const onFilesHome = isAdmin ? onAdminHome : pathname === "/dashboard";
 
   return (
     <>
@@ -216,7 +333,7 @@ function Sidebar({ mobileOpen, onClose }) {
         }`}
       >
         {/* BRAND */}
-        <div className="flex h-16 shrink-0 items-center justify-between px-5">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#EEF1F0] px-5">
           <Link
             to="/home"
             onClick={onClose}
@@ -246,233 +363,221 @@ function Sidebar({ mobileOpen, onClose }) {
             aria-label="Close menu"
             className={`rounded-lg p-2 text-[#667085] transition hover:bg-[#F3F6F5] hover:text-[#0B2B24] lg:hidden ${FOCUS}`}
           >
-            <X size={20} />
+            <X size={20} strokeWidth={ICON_STROKE} />
           </button>
         </div>
 
         {/* NAVIGATION */}
-        <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-2">
-          <p className="mb-2 px-3 text-xs font-medium text-[#98A2B3]">Main menu</p>
-
+        <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-3">
+          {/* Home (the page shown after sign-in) */}
           <ul className="space-y-0.5">
-            {/* Home (the page shown after sign-in) */}
-            <li className="flex items-center">
-              <TreeLink to="/home" active={onHome} onClick={onClose}>
-                <Home size={18} className={onHome ? "text-[#00664E]" : "text-[#98A2B3]"} />
-                <span className="flex-1">Home</span>
-              </TreeLink>
+            <li className="flex">
+              <NavItem to="/home" active={onHome} onClick={onClose} icon={Home}>
+                Home
+              </NavItem>
             </li>
+          </ul>
 
-            {/* M&E (monitoring and evaluation) */}
+          {/* MY WORKPLACE */}
+          <SectionLabel>My workplace</SectionLabel>
+          <ul className="space-y-0.5">
+            <li className="flex">
+              <NavItem to="/attendance" active={onAttendance} onClick={onClose} icon={CalendarCheck}>
+                Attendance &amp; leave
+              </NavItem>
+            </li>
+            <li className="flex">
+              <NavItem to="/travel" active={onTravel} onClick={onClose} icon={Plane}>
+                Travel
+              </NavItem>
+            </li>
+          </ul>
+
+          {/* PROGRAMMES AND RESULTS */}
+          <SectionLabel>Programmes &amp; results</SectionLabel>
+          <ul className="space-y-0.5">
             <li>
-              <button
-                type="button"
-                onClick={() => setMeOpen((open) => !open)}
-                aria-expanded={meOpen}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition hover:bg-[#F3F6F5] motion-reduce:transition-none ${FOCUS} ${
-                  onMe ? "text-[#5B3FD0]" : "text-[#475467] hover:text-[#0B2B24]"
-                }`}
-              >
-                <Target size={18} className={onMe ? "text-[#5B3FD0]" : "text-[#98A2B3]"} />
-                <span className="flex-1 text-left">M&amp;E</span>
-                <ChevronDown
-                  size={15}
-                  className={`text-[#98A2B3] transition-transform motion-reduce:transition-none ${
-                    meOpen ? "" : "-rotate-90"
-                  }`}
-                />
-              </button>
+              <GroupToggle
+                icon={Target}
+                label="M&E"
+                tone="purple"
+                open={meOpen}
+                active={onMe}
+                controls="me-menu"
+                onToggle={() => setMeOpen((open) => !open)}
+              />
 
               {meOpen && (
-                <div className="ml-4 mt-0.5 space-y-2 border-l border-[#E6ECE9] pl-2">
+                <div id="me-menu" className="ml-[21px] mt-1 space-y-3 border-l border-[#E6ECE9] pb-1 pl-3">
                   {ME_GROUPS.map((group) => (
                     <div key={group.label}>
-                      <p className="px-3 pb-1 pt-1 text-xs font-medium text-[#98A2B3]">
-                        {group.label}
-                      </p>
+                      <p className="px-3 pb-1 text-[11px] font-medium text-[#98A2B3]">{group.label}</p>
 
                       <ul className="space-y-0.5">
                         {group.items
                           .filter((item) => !item.adminOnly || isAdmin)
-                          .map((item) => {
-                            const Icon = item.icon;
-                            const active = meActive(item.href);
-
-                            return (
-                              <li key={item.href} className="flex">
-                                <TreeLink
-                                  small
-                                  tone="purple"
-                                  to={item.href}
-                                  active={active}
-                                  onClick={onClose}
-                                >
-                                  <Icon
-                                    size={16}
-                                    className={active ? "text-[#5B3FD0]" : "text-[#98A2B3]"}
-                                  />
-                                  <span className="flex-1 truncate">{item.name}</span>
-                                  {item.badge && (
-                                    <span className="rounded-full bg-[#EDE9FB] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B3FD0]">
-                                      {item.badge}
-                                    </span>
-                                  )}
-                                </TreeLink>
-                              </li>
-                            );
-                          })}
+                          .map((item) => (
+                            <li key={item.href} className="flex">
+                              <NavItem
+                                small
+                                tone="purple"
+                                to={item.href}
+                                icon={item.icon}
+                                active={meActive(item.href)}
+                                onClick={onClose}
+                              >
+                                <span className="flex-1 truncate">{item.name}</span>
+                                {item.badge && (
+                                  <span className="rounded-full bg-[#EEEAFB] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B3FD0]">
+                                    {item.badge}
+                                  </span>
+                                )}
+                              </NavItem>
+                            </li>
+                          ))}
                       </ul>
                     </div>
                   ))}
                 </div>
               )}
             </li>
+          </ul>
 
-            {/* All files (administrator) / My department (staff) */}
-            <li className="flex items-center">
-              <TreeLink
-                to={isAdmin ? "/admin" : "/dashboard"}
-                active={isAdmin ? onAdminHome : pathname === "/dashboard"}
-                onClick={onClose}
-              >
-                <FolderIcon />
-                <span className="flex-1">{isAdmin ? "All files" : "My departments"}</span>
-              </TreeLink>
+          {/* FILES */}
+          <SectionLabel>Files</SectionLabel>
+          <ul className="space-y-0.5">
+            <li className="flex">
+              <NavItem to={filesHome} active={onFilesHome} onClick={onClose} icon={FolderOpen}>
+                {isAdmin ? "All files" : "My departments"}
+              </NavItem>
             </li>
 
-            {/* Programs + thematic areas */}
-            <li>
-              <div className="ml-4 border-l border-[#E6ECE9] pl-2">
-                {visibleAreas.length > 0 && (
-                  <div className="flex items-center">
-                    <TreeLink
-                      to="/admin/programs"
-                      active={onPrograms && !activeArea}
-                      onClick={onClose}
-                    >
-                      <FolderIcon />
-                      <span className="flex-1">{LABELS.programmes}</span>
-                    </TreeLink>
+            {/* Programmes + thematic areas */}
+            {visibleAreas.length > 0 && (
+              <li>
+                <div className="flex items-center gap-1">
+                  <NavItem
+                    to="/admin/programs"
+                    active={onPrograms && !activeArea}
+                    onClick={onClose}
+                    icon={Layers}
+                  >
+                    {LABELS.programmes}
+                  </NavItem>
 
-                    <button
-                      type="button"
-                      onClick={() => setProgramsOpen((open) => !open)}
-                      aria-expanded={programsOpen}
-                      aria-label={programsOpen ? `Collapse ${LABELS.programmes}` : `Expand ${LABELS.programmes}`}
-                      className={`ml-1 rounded-lg p-1.5 text-[#98A2B3] hover:bg-[#F3F6F5] hover:text-[#0B2B24] ${FOCUS}`}
-                    >
-                      <ChevronDown
-                        size={15}
-                        className={`transition-transform motion-reduce:transition-none ${
-                          programsOpen ? "" : "-rotate-90"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setProgramsOpen((open) => !open)}
+                    aria-expanded={programsOpen}
+                    aria-controls="programmes-menu"
+                    aria-label={programsOpen ? `Collapse ${LABELS.programmes}` : `Expand ${LABELS.programmes}`}
+                    className={`rounded-lg p-1.5 text-[#98A2B3] transition-colors hover:bg-[#F4F6F5] hover:text-[#0B2B24] ${FOCUS}`}
+                  >
+                    <ChevronDown
+                      size={15}
+                      strokeWidth={ICON_STROKE}
+                      className={`transition-transform motion-reduce:transition-none ${programsOpen ? "" : "-rotate-90"}`}
+                    />
+                  </button>
+                </div>
 
-                {programsOpen && visibleAreas.length > 0 && (
-                  <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-[#E6ECE9] pl-2">
+                {programsOpen && (
+                  <ul id="programmes-menu" className="ml-[21px] mt-0.5 space-y-0.5 border-l border-[#E6ECE9] pl-3">
                     {visibleAreas.map((area) => (
                       <li key={area.slug} className="flex">
-                        <TreeLink
+                        <NavItem
                           small
                           to={`/admin/programs?area=${area.slug}`}
                           active={onPrograms && activeArea === area.slug}
                           onClick={onClose}
                         >
-                          <FolderIcon size={16} color={AREA_COLORS[area.slug]} />
+                          <Dot color={AREA_COLORS[area.slug]} />
                           <span className="truncate">{area.name}</span>
-                        </TreeLink>
+                        </NavItem>
                       </li>
                     ))}
                   </ul>
                 )}
+              </li>
+            )}
 
-                {visibleDepartments.length > 0 && (
-                  <div className="mt-2">
-                    <p className="px-3 pb-1 text-xs font-medium text-[#98A2B3]">
-                      Departments
-                    </p>
+            {/* Departments */}
+            {visibleDepartments.length > 0 && (
+              <li>
+                <GroupToggle
+                  icon={Building2}
+                  label="Departments"
+                  open={deptsOpen}
+                  active={onPrograms && visibleDepartments.some((area) => area.slug === activeArea)}
+                  controls="departments-menu"
+                  onToggle={() => setDeptsOpen((open) => !open)}
+                />
 
-                    <ul className="ml-4 space-y-0.5 border-l border-[#E6ECE9] pl-2">
-                      {visibleDepartments.map((area) => (
-                        <li key={area.slug} className="flex">
-                          <TreeLink
-                            small
-                            to={`/admin/programs?area=${area.slug}`}
-                            active={onPrograms && activeArea === area.slug}
-                            onClick={onClose}
-                          >
-                            <FolderIcon size={16} color={AREA_COLORS[area.slug]} />
-                            <span className="flex-1 truncate">{area.name}</span>
-                            {area.restricted && (
-                              <Lock size={12} className="text-[#D98A00]" aria-label="Restricted" />
-                            )}
-                          </TreeLink>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                {deptsOpen && (
+                  <ul id="departments-menu" className="ml-[21px] mt-0.5 space-y-0.5 border-l border-[#E6ECE9] pl-3">
+                    {visibleDepartments.map((area) => (
+                      <li key={area.slug} className="flex">
+                        <NavItem
+                          small
+                          to={`/admin/programs?area=${area.slug}`}
+                          active={onPrograms && activeArea === area.slug}
+                          onClick={onClose}
+                        >
+                          <Dot color={AREA_COLORS[area.slug]} />
+                          <span className="flex-1 truncate">{area.name}</span>
+                          {area.restricted && (
+                            <Lock size={12} strokeWidth={ICON_STROKE} className="text-[#D98A00]" aria-label="Restricted" />
+                          )}
+                        </NavItem>
+                      </li>
+                    ))}
+                  </ul>
                 )}
+              </li>
+            )}
 
-                {canSee("finance") && (
-                  <div className="mt-0.5 flex">
-                    <TreeLink
-                      to="/admin/finance"
-                      active={pathname.startsWith("/admin/finance")}
-                      onClick={onClose}
-                    >
-                      <FolderIcon color={AREA_COLORS.finance} />
-                      <span className="flex-1">Finance</span>
-                      <Lock size={13} className="text-[#D98A00]" aria-label="Restricted" />
-                    </TreeLink>
-                  </div>
-                )}
-              </div>
-            </li>
+            {/* Finance */}
+            {canSee("finance") && (
+              <li className="flex">
+                <NavItem to="/admin/finance" active={onFinance} onClick={onClose} icon={Landmark}>
+                  <span className="flex-1">Finance</span>
+                  <Lock size={13} strokeWidth={ICON_STROKE} className="text-[#D98A00]" aria-label="Restricted" />
+                </NavItem>
+              </li>
+            )}
           </ul>
 
           {/* ADMINISTRATION (administrator only) */}
           {isAdmin && (
-            <div className="mt-6 border-t border-[#E6ECE9] pt-4">
-              <p className="mb-2 px-3 text-xs font-medium text-[#98A2B3]">
-                Administration
-              </p>
-
+            <>
+              <SectionLabel>Administration</SectionLabel>
               <ul className="space-y-0.5">
-                {ADMIN_LINKS.map((item) => {
-                  const Icon = item.icon;
-                  const active = pathname.startsWith(item.href);
-
-                  return (
-                    <li key={item.name} className="flex">
-                      <TreeLink to={item.href} active={active} onClick={onClose}>
-                        <Icon
-                          size={18}
-                          className={active ? "text-[#008060]" : "text-[#98A2B3]"}
-                        />
-                        <span className="flex-1">{item.name}</span>
-                      </TreeLink>
-                    </li>
-                  );
-                })}
+                {ADMIN_LINKS.map((item) => (
+                  <li key={item.name} className="flex">
+                    <NavItem
+                      to={item.href}
+                      icon={item.icon}
+                      active={pathname.startsWith(item.href)}
+                      onClick={onClose}
+                    >
+                      {item.name}
+                    </NavItem>
+                  </li>
+                ))}
               </ul>
-            </div>
+            </>
           )}
         </nav>
 
-        {/* PRIVATE STORAGE CARD */}
-        <div className="shrink-0 p-4">
-          <div className="rounded-2xl bg-[#EEF7F3] p-4 ring-1 ring-[#D5EBE2]">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#008060] text-white">
-              <ShieldCheck size={18} />
+        {/* PRIVATE STORAGE NOTE */}
+        <div className="shrink-0 border-t border-[#EEF1F0] p-3">
+          <div className="flex items-center gap-3 rounded-xl bg-[#F4F8F6] px-3 py-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#008060] text-white">
+              <ShieldCheck size={16} strokeWidth={ICON_STROKE} />
             </span>
-
-            <p className="mt-3 text-sm font-semibold text-[#0B2B24]">Private storage</p>
-
-            <p className="mt-1 text-xs leading-5 text-[#475467]">
-              Files are encrypted and visible only to authorised staff.
+            <p className="text-xs leading-4 text-[#475467]">
+              <span className="block text-[13px] font-semibold text-[#0B2B24]">Private storage</span>
+              Encrypted, authorised staff only
             </p>
           </div>
         </div>

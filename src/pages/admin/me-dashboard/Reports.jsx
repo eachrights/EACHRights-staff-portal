@@ -10,9 +10,9 @@ import {
 /*
  * Three report types, built in a two-column workspace: choose what goes in on the left,
  * see the finished page on the right, then print it or save it as a PDF.
- *  Visual report       summary, key figures, charts, outlook, results with analysis, data notes,
- *                      next steps and an evidence index. The summary and next steps can be drafted
- *                      from the figures, or written by the AI assistant, and are always editable.
+ *  Visual report       a narrative report: every section is written out in plain sentences from the
+ *                      approved figures and supported by a chart. The wording can be edited, reset,
+ *                      or drafted by the AI assistant (the report reads fully without the assistant).
  *  Table-based report  every result and indicator with baseline, targets and actuals for each period
  *  Program report      the projects of one programme brought together, with combined results
  * Only approved values count towards progress and results.
@@ -22,7 +22,7 @@ const AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
 const areaName = (slug) => AREAS.find((a) => a.slug === slug)?.name || slug || "No area";
 
 const VIEWS = [
-  ["visual", "Visual report", "Summary, charts, outlook and analysis"],
+  ["visual", "Visual report", "A narrative supported by graphs"],
   ["table", "Table-based report", "Targets and actuals for every period"],
   ["program", LABELS.programmeReport, "The projects of one programme together"],
 ];
@@ -39,18 +39,18 @@ const DEFAULT_SECTIONS = {
   summary: true,
   figures: true,
   charts: true,
-  outlook: true,
   results: true,
+  outlook: true,
   quality: true,
   recs: true,
   evidence: false,
 };
 const SECTION_LABELS = [
-  ["summary", "Executive summary", "A short written overview"],
+  ["summary", "Executive summary", "A written overview"],
   ["figures", "Key figures", "The headline numbers"],
-  ["charts", "Charts", "Progress, trend and reporting status"],
+  ["charts", "Performance", "Narrative with charts"],
+  ["results", "Results", "A narrative and chart for each result"],
   ["outlook", "Outlook", "Where the project is heading"],
-  ["results", "Results and analysis", "Each result with your comments"],
   ["quality", "Data notes", "What is waiting, rejected or missing"],
   ["recs", "Next steps", "Recommended follow-up"],
   ["evidence", "Evidence index", "Files and links behind the values"],
@@ -61,11 +61,14 @@ const CHARTS = [
   ["levels", "Reporting status by result"],
 ];
 
+const SPLIT_COLORS = ["#00664E", "#B54708", "#5B3FD0", "#344054", "#2D8A68", "#D4A600"];
+
 const MAX_IMAGE_BYTES = 1_500_000;
 const fmt = (n) => (n === undefined || n === null || n === "" ? "-" : Number(n).toLocaleString());
 const pctOf = (actual, target) => (target ? Math.round((actual / target) * 100) : null);
 const average = (list) => (list.length ? Math.round(list.reduce((a, b) => a + b, 0) / list.length) : null);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const pluralWord = (n, word) => (n === 1 ? `${n} ${word}` : word.endsWith("y") ? `${n} ${word.slice(0, -1)}ies` : `${n} ${word}s`);
 const isGenderType = (type) =>
   /\b(gender|sex)\b/i.test([type?.name, type?.slug, type?.code, type?.key].filter(Boolean).join(" "));
 
@@ -184,6 +187,62 @@ function ResultBars({ groups }) {
   );
 }
 
+/* One bar per indicator: the share of target reached, coloured by progress band */
+function IndicatorBars({ items }) {
+  if (items.length === 0) return null;
+  return (
+    <ul className="space-y-2.5">
+      {items.map((it) => (
+        <li key={it.id} className="break-inside-avoid">
+          <div className="flex items-baseline justify-between gap-3 text-xs">
+            <span className="min-w-0 truncate text-[#475467]" title={it.label}>{it.label}</span>
+            <span className="shrink-0 font-semibold tabular-nums text-[#101828]">{it.value}</span>
+          </div>
+          <div
+            className="mt-1 h-2.5 overflow-hidden rounded-full bg-[#EEF0F4]"
+            role="img"
+            aria-label={`${it.label}: ${it.value}`}
+          >
+            <div className="h-full rounded-full" style={{ width: `${Math.min(it.pct ?? 0, 100)}%`, backgroundColor: it.color }} />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/* A single stacked bar for a breakdown, such as women and men */
+function SplitBar({ title, parts }) {
+  const total = parts.reduce((s, p) => s + p.value, 0);
+  if (total <= 0) return null;
+  return (
+    <div className="break-inside-avoid">
+      <p className="text-xs text-[#475467]">{title}</p>
+      <div
+        className="mt-1 flex h-3 overflow-hidden rounded-full bg-[#EEF0F4]"
+        role="img"
+        aria-label={parts.map((p) => `${p.label}: ${p.value}`).join(", ")}
+      >
+        {parts.map((p, i) =>
+          p.value > 0 ? (
+            <div key={p.label} style={{ width: `${(p.value / total) * 100}%`, backgroundColor: SPLIT_COLORS[i % SPLIT_COLORS.length] }} title={`${p.label}: ${p.value}`} />
+          ) : null
+        )}
+      </div>
+      <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-[#475467]">
+        {parts.map((p, i) => (
+          <li key={p.label} className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-2 w-2 rounded-[3px]" style={{ backgroundColor: SPLIT_COLORS[i % SPLIT_COLORS.length] }} />
+            {p.label}
+            <span className="font-semibold tabular-nums text-[#101828]">{fmt(p.value)}</span>
+            <span className="text-[#98A2B3]">({Math.round((p.value / total) * 100)}%)</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ---------- Workspace pieces ---------- */
 
 function Toggle({ label, hint, checked, onChange }) {
@@ -276,7 +335,7 @@ function DetailsPanel({ brand, setBrand, titleHint }) {
           {imageError && <p role="alert" className="mt-1 text-xs text-red-700">{imageError}</p>}
         </div>
       </div>
-      <p className="mt-3 text-[11px] leading-snug text-[#98A2B3]">Comments, images and details are kept on this page only. Print or save as PDF before leaving it.</p>
+      <p className="mt-3 text-[11px] leading-snug text-[#98A2B3]">Edits, images and details are kept on this page only. Print or save as PDF before leaving it.</p>
     </section>
   );
 }
@@ -345,28 +404,56 @@ function Figure({ label, value, note, color }) {
   );
 }
 
-/* A text box that is editable on screen and plain paragraphs in print */
-function WriteBox({ id, value, onChange, rows = 4, placeholder }) {
+/*
+ * A paragraph or two of written text. It shows the text calculated from the figures, so the report
+ * reads as a narrative straight away. "Edit text" replaces it with the person's own wording, and
+ * "Reset" goes back to the calculated text, which keeps following the figures. Print shows only the text.
+ */
+function Narrative({ id, auto, overrides, setOverrides, rows = 4 }) {
+  const [editing, setEditing] = useState(false);
+  const overridden = overrides[id] !== undefined;
+  const value = overridden ? overrides[id] : auto;
+  const setValue = (v) => setOverrides((o) => ({ ...o, [id]: v }));
+  const reset = () => {
+    setOverrides((o) => {
+      const { [id]: _gone, ...rest } = o;
+      return rest;
+    });
+    setEditing(false);
+  };
   return (
-    <>
-      <textarea
-        id={id}
-        rows={rows}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className={`${FIELD} w-full print:hidden`}
-      />
-      {value && (
-        <div className="hidden space-y-2 text-sm leading-6 text-[#344054] print:block">
-          {value.split(/\n{2,}/).map((para, i) => (
-            <p key={i} className="whitespace-pre-line">{para}</p>
-          ))}
-        </div>
+    <div>
+      <div className={`space-y-2 text-sm leading-6 text-[#344054] ${editing ? "hidden print:block" : ""}`}>
+        {value.split(/\n{2,}/).filter(Boolean).map((para, i) => (
+          <p key={i} className="whitespace-pre-line">{para}</p>
+        ))}
+      </div>
+      {editing && (
+        <textarea
+          rows={Math.max(rows, value.split("\n").length + 1)}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          aria-label="Edit the text of this section"
+          className={`${FIELD} w-full print:hidden`}
+        />
       )}
-    </>
+      <div className="mt-1.5 flex flex-wrap gap-3 text-xs print:hidden">
+        <button type="button" onClick={() => setEditing((e) => !e)} className="font-medium text-[#00664E] hover:underline">
+          {editing ? "Done" : "Edit text"}
+        </button>
+        {overridden && (
+          <button type="button" onClick={reset} className="font-medium text-[#667085] hover:underline">
+            Reset to calculated text
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
+
+const Caption = ({ n, children }) => (
+  <p className="mt-2 text-xs italic text-[#98A2B3]">Figure {n}. {children}</p>
+);
 
 /* ---------- Visual report ---------- */
 
@@ -374,9 +461,8 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
   const [sections, setSections] = useState(DEFAULT_SECTIONS);
   const [charts, setCharts] = useState({ progress: true, trend: true, levels: true });
   const [included, setIncluded] = useState(null); // null means every result
-  const [analysis, setAnalysis] = useState({}); // { [resultId]: { text, image } }
-  const [summary, setSummary] = useState("");
-  const [recs, setRecs] = useState("");
+  const [images, setImages] = useState({}); // { [resultId]: data URL }
+  const [overrides, setOverrides] = useState({}); // { [section]: the person's own wording }
   const [ai, setAi] = useState({ busy: "", error: "" });
   const [imageError, setImageError] = useState("");
 
@@ -410,12 +496,13 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
       .filter((i) => chosen(i.resultId))
       .map((i) => projectIndicator(i, approvedMap, fw.periods))
       .filter(Boolean);
-    const rated = list.filter((o) => o.ratio !== null);
+    const rated = list.filter((o) => o.ratio !== null).sort((a, b) => a.ratio - b.ratio);
     return {
       total: list.length,
       rated: rated.length,
+      list: rated,
       pct: rated.length ? Math.round(rated.reduce((s, o) => s + Math.min(o.ratio, 100), 0) / rated.length) : null,
-      behind: rated.filter((o) => o.ratio < 90).sort((a, b) => a.ratio - b.ratio),
+      behind: rated.filter((o) => o.ratio < 90),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, approvedMap, fw.periods, included]);
@@ -448,19 +535,20 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
     .filter((x) => x.ind && chosen(x.ind.resultId))
     .sort((a, b) => a.ind.name.localeCompare(b.ind.name));
 
-  /* A value's breakdowns as readable lines, gender first */
+  /* A value's breakdowns with their numbers, gender first */
   const sortedTypes = useMemo(() => [...types.filter(isGenderType), ...types.filter((t) => !isGenderType(t))], [types]);
-  const breakdownLines = (v) =>
+  const breakdownData = (v) =>
     sortedTypes
       .filter((t) => v?.breakdown?.[t.id])
       .map((t) => ({
         id: t.id,
         name: t.name,
-        parts: t.categories.filter((c) => v.breakdown[t.id][c] !== undefined).map((c) => `${c} ${fmt(v.breakdown[t.id][c])}`),
+        parts: t.categories.filter((c) => v.breakdown[t.id][c] !== undefined).map((c) => ({ label: c, value: Number(v.breakdown[t.id][c]) })),
       }));
 
-  /* A summary written from the figures alone, with no AI */
-  const calculatedSummary = () => {
+  /* ---------- The written text, calculated from the figures ---------- */
+
+  const summaryText = () => {
     const parts = [];
     parts.push(
       avgPct === null
@@ -475,6 +563,98 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
     if (notes.length) parts.push(`${notes.join(", ")}.`);
     if (outlook.pct !== null) parts.push(`If the current pace continues, the project is on course to reach about ${outlook.pct}% of its targets.`);
     return parts.join(" ");
+  };
+
+  const progressText = () =>
+    withPct.length === 0
+      ? `No indicator has an approved value for ${period} yet, so progress against targets cannot be reported.`
+      : `In ${period}, ${withPct.length} of the ${expected.length} indicators with a target have approved results, averaging ${avgPct}% of target. ${plural(counts.on, "indicator is", "indicators are")} on track (90% of target or more), ${counts.risk} at risk (50% to 89%) and ${counts.off} off track (below 50%).`;
+
+  const trendText = () => {
+    const known = trend.filter((p) => p.pct !== null);
+    if (known.length === 0) return "No reporting period has approved results yet, so there is no trend to describe.";
+    if (known.length === 1) return `Average achievement for ${known[0].period} is ${known[0].pct}% of target. More periods of approved data are needed to show a trend.`;
+    const first = known[0];
+    const last = known[known.length - 1];
+    const diff = last.pct - first.pct;
+    const change = diff > 0 ? `an improvement of ${diff} percentage points` : diff < 0 ? `a drop of ${Math.abs(diff)} percentage points` : "no change";
+    return `Average achievement moved from ${first.pct}% of target in ${first.period} to ${last.pct}% in ${last.period}, ${change}.`;
+  };
+
+  const statusText = () => {
+    const a = levelGroups.reduce((s, g) => s + g.approved, 0);
+    const w = levelGroups.reduce((s, g) => s + g.awaiting, 0);
+    const m = levelGroups.reduce((s, g) => s + g.missing, 0);
+    if (levelGroups.length === 0) return `No indicator under the selected results has a target for ${period}.`;
+    const out = [`For ${period}, ${plural(a, "indicator is", "indicators are")} approved, ${w} awaiting approval and ${m} not yet reported.`];
+    const worst = [...levelGroups].sort((x, y) => y.missing - x.missing)[0];
+    if (worst && worst.missing > 0) out.push(`"${worst.title}" has the most indicators still to be reported (${worst.missing} of ${worst.total}).`);
+    return out.join(" ");
+  };
+
+  const outlookText = () => {
+    if (outlook.pct === null) return "No indicator has approved data yet, so the project cannot be projected.";
+    return `Averaging the projected result of ${outlook.rated} of ${outlook.total} ${outlook.total === 1 ? "indicator" : "indicators"}, the project is on course to reach about ${outlook.pct}% of its targets${fw.endDate ? " by its end date" : ""}. ${
+      outlook.behind.length
+        ? `${plural(outlook.behind.length, "indicator is", "indicators are")} projected to finish below 90% of target.`
+        : "No indicator is projected to fall short."
+    }`;
+  };
+
+  const resultText = (r, inds) => {
+    const level = (fw.levels?.[r.level] ?? `Level ${r.level + 1}`).toLowerCase();
+    const targeted = inds.filter((x) => x.target !== undefined);
+    if (targeted.length === 0) return `No indicator under this ${level} has a target for ${period}.`;
+    const done = targeted.filter((x) => x.pct !== null);
+    const first = [];
+    if (done.length === 0) {
+      first.push(`No indicator under this ${level} has an approved value for ${period} yet.`);
+    } else {
+      first.push(`Under this ${level}, ${done.length} of ${targeted.length} ${targeted.length === 1 ? "indicator has" : "indicators have"} approved results for ${period}, averaging ${average(done.map((x) => x.pct))}% of target.`);
+      const sorted = [...done].sort((a, b) => b.pct - a.pct);
+      const best = sorted[0];
+      const worst = sorted[sorted.length - 1];
+      const unit = (x) => (x.ind.unit ? ` ${x.ind.unit}` : "");
+      first.push(
+        done.length > 1
+          ? `${best.ind.name} did best at ${best.pct}% of target, while ${worst.ind.name} is furthest behind at ${worst.pct}%.`
+          : `${best.ind.name} reached ${best.pct}% of its target (${fmt(best.saved.actual)} of ${fmt(best.target)}${unit(best)}).`
+      );
+    }
+    const second = [];
+    for (const x of done) {
+      const n = x.saved.entries?.length || 0;
+      if (n > 0) {
+        second.push(`${x.ind.name} was delivered through ${pluralWord(n, x.ind.activityLabel || "activity")}, reaching ${fmt(x.saved.actual)} ${x.ind.unit || "people"}.`);
+      }
+      const b = breakdownData(x.saved)[0];
+      if (b) second.push(`By ${b.name.toLowerCase()}, ${x.ind.name} was ${b.parts.map((p) => `${p.label} ${fmt(p.value)}`).join(", ")}.`);
+    }
+    return [first.join(" "), second.join(" ")].filter(Boolean).join("\n\n");
+  };
+
+  const dataNotesText = () => {
+    if (awaiting.length + rejected.length + missing.length === 0) return `Every indicator with a target has an approved value for ${period}.`;
+    const names = (list) => `${list.slice(0, 6).map((r) => r.ind.name).join("; ")}${list.length > 6 ? `; and ${list.length - 6} more` : ""}`;
+    const out = [];
+    if (awaiting.length) {
+      out.push(`${plural(awaiting.length, "value is", "values are")} awaiting approval and not counted${corrections.length ? `, including ${plural(corrections.length, "correction", "corrections")} to earlier approved values` : ""}: ${names(awaiting)}.`);
+    }
+    if (rejected.length) out.push(`${plural(rejected.length, "value was", "values were")} rejected and needs correcting: ${names(rejected)}.`);
+    if (missing.length) out.push(`${plural(missing.length, "indicator has", "indicators have")} not been reported: ${names(missing)}.`);
+    return out.join("\n\n");
+  };
+
+  const recsText = () => {
+    const items = [];
+    if (awaiting.length) items.push(`Approve the ${plural(awaiting.length, "value", "values")} still awaiting approval, so ${awaiting.length === 1 ? "it counts" : "they count"} towards progress.`);
+    if (rejected.length) items.push(`Correct and resubmit the ${plural(rejected.length, "rejected value", "rejected values")}.`);
+    if (missing.length) items.push(`Collect and report data for the ${plural(missing.length, "indicator", "indicators")} with no value for ${period}.`);
+    const lagging = withPct.filter((r) => r.progress === "off" || r.progress === "risk").sort((a, b) => a.pct - b.pct).slice(0, 3);
+    if (lagging.length) items.push(`Review why ${lagging.map((r) => r.ind.name).join(", ")} ${lagging.length === 1 ? "is" : "are"} behind target, and agree actions to catch up.`);
+    if (outlook.behind.length) items.push(`Plan ahead for the ${plural(outlook.behind.length, "indicator", "indicators")} projected to finish below 90% of target.`);
+    if (items.length === 0) items.push("Keep up the current pace, and keep attaching evidence to every reported value.");
+    return items.map((t, i) => `${i + 1}. ${t}`).join("\n\n");
   };
 
   /* The figures the AI assistant is allowed to use. It never produces numbers of its own. */
@@ -512,7 +692,7 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
   });
 
   const draftWithAI = async (field, mode, question, current, apply) => {
-    if (current.trim() && !window.confirm("Replace what you have written with a new draft?")) return;
+    if (overrides[field] !== undefined && current.trim() && !window.confirm("Replace what you have written with a new draft?")) return;
     setAi({ busy: field, error: "" });
     try {
       const reply = await api(`/me/frameworks/${frameworkId}/assistant`, {
@@ -528,20 +708,29 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
     }
   };
 
-  const setText = (id, value) => setAnalysis((a) => ({ ...a, [id]: { ...a[id], text: value } }));
   const setImage = (id, file) => {
     setImageError("");
     if (!file) return;
     if (!file.type.startsWith("image/")) return setImageError("Choose an image file.");
     if (file.size > MAX_IMAGE_BYTES) return setImageError("Images must be 1.5 MB or smaller.");
     const reader = new FileReader();
-    reader.onload = () => setAnalysis((a) => ({ ...a, [id]: { ...a[id], image: String(reader.result) } }));
+    reader.onload = () => setImages((a) => ({ ...a, [id]: String(reader.result) }));
     reader.readAsDataURL(file);
   };
-  const removeImage = (id) => setAnalysis((a) => ({ ...a, [id]: { ...a[id], image: "" } }));
+  const removeImage = (id) => setImages((a) => { const { [id]: _gone, ...rest } = a; return rest; });
 
   const accent = brand.accent;
   const anyChart = charts.progress || charts.trend || charts.levels;
+  const summaryAuto = summaryText();
+  const recsAuto = recsText();
+  const narrative = (id, auto, rowsHint) => <Narrative id={id} auto={auto} overrides={overrides} setOverrides={setOverrides} rows={rowsHint} />;
+
+  /* Figures are numbered in the order they appear on the page */
+  let figNo = 0;
+  const nextFig = () => {
+    figNo += 1;
+    return figNo;
+  };
 
   const side = (
     <>
@@ -554,7 +743,7 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
         </div>
         {sections.charts && (
           <div className="mt-2 border-t border-[#F2F4F7] pt-2">
-            <PanelTitle>Charts</PanelTitle>
+            <PanelTitle>Performance charts</PanelTitle>
             <div className="-mx-2">
               {CHARTS.map(([key, label]) => (
                 <Toggle key={key} label={label} checked={charts[key]} onChange={(on) => setCharts((c) => ({ ...c, [key]: on }))} />
@@ -598,13 +787,10 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
         </header>
 
         {sections.summary && (
-          <section className={summary ? "" : "print:hidden"}>
+          <section>
             <SectionTitle title="Executive summary" subtitle="A short overview for the reader." accent={accent} />
-            <WriteBox id="summary" value={summary} onChange={setSummary} rows={5} placeholder="Write the summary, or draft it from the figures." />
+            {narrative("summary", summaryAuto, 5)}
             <div className="mt-2 flex flex-wrap gap-2 print:hidden">
-              <button type="button" className={BTN_LIGHT} onClick={() => setSummary(calculatedSummary())}>
-                Draft from the figures
-              </button>
               <button
                 type="button"
                 className={BTN_LIGHT}
@@ -614,8 +800,8 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
                     "summary",
                     "report",
                     "Write a short executive summary of this project's progress in the selected period, suitable for a donor report. Use two or three plain paragraphs.",
-                    summary,
-                    setSummary
+                    overrides.summary || "",
+                    (answer) => setOverrides((o) => ({ ...o, summary: answer }))
                   )
                 }
               >
@@ -638,111 +824,95 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
         )}
 
         {sections.charts && anyChart && (
-          <section className="grid gap-8 sm:grid-cols-2">
+          <section className="space-y-8">
+            <SectionTitle title="Performance" subtitle={`How ${period} compares with the targets, and how it has moved over time.`} accent={accent} />
+
             {charts.progress && (
               <div className="break-inside-avoid">
-                <SectionTitle title="Progress against target" subtitle={`${expected.length} indicators`} accent={accent} />
-                <ProgressBar counts={counts} total={expected.length} />
+                {narrative("progress", progressText(), 3)}
+                <div className="mt-3 max-w-lg">
+                  <ProgressBar counts={counts} total={expected.length} />
+                </div>
+                <Caption n={nextFig()}>Indicators by progress against target, {period}.</Caption>
               </div>
             )}
+
             {charts.trend && (
               <div className="break-inside-avoid">
-                <SectionTitle title="Achievement by period" subtitle="Average percentage of target" accent={accent} />
-                <TrendLine points={trend} accent={accent} />
+                {narrative("trend", trendText(), 3)}
+                <div className="mt-3 max-w-lg">
+                  <TrendLine points={trend} accent={accent} />
+                </div>
+                <Caption n={nextFig()}>Average percentage of target reached, by reporting period.</Caption>
               </div>
             )}
-            {charts.levels && (
-              <div className="break-inside-avoid sm:col-span-2">
-                <SectionTitle title="Reporting status by result" subtitle={`Indicators with a target, ${period}`} accent={accent} />
-                <ResultBars groups={levelGroups} />
-              </div>
-            )}
-          </section>
-        )}
 
-        {sections.outlook && (
-          <section className="break-inside-avoid">
-            <SectionTitle title="Outlook" subtitle="Where the project is heading by its last period, at the pace reached so far." accent={accent} />
-            {outlook.pct === null ? (
-              <p className="text-sm text-[#98A2B3]">No indicator has approved data yet, so the project cannot be projected.</p>
-            ) : (
-              <>
-                <p className="text-sm leading-6 text-[#344054]">
-                  Averaging the projected result of {outlook.rated} of {outlook.total} {outlook.total === 1 ? "indicator" : "indicators"}, the project is on course to reach about{" "}
-                  <strong className="text-[#101828]">{outlook.pct}%</strong> of its targets
-                  {fw.endDate ? ` by its end date` : ""}.{" "}
-                  {outlook.behind.length
-                    ? `${plural(outlook.behind.length, "indicator is", "indicators are")} projected to finish below 90% of target.`
-                    : "No indicator is projected to fall short."}
-                </p>
-                {outlook.behind.length > 0 && (
-                  <ul className="mt-3 divide-y divide-[#F2F4F7] rounded-lg border border-[#EAECF0] text-sm">
-                    {outlook.behind.slice(0, 8).map((o) => (
-                      <li key={o.ind.id} className="flex items-center gap-3 px-4 py-2">
-                        <span className="min-w-0 flex-1 text-[#344054]">{o.ind.name}</span>
-                        <ProgressDot progress={progressOf(o.ratio)} pct={o.ratio} />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
+            {charts.levels && (
+              <div className="break-inside-avoid">
+                {narrative("status", statusText(), 3)}
+                <div className="mt-3">
+                  <ResultBars groups={levelGroups} />
+                </div>
+                <Caption n={nextFig()}>Reporting status of the indicators under each result, {period}.</Caption>
+              </div>
             )}
           </section>
         )}
 
         {sections.results && (
           <section>
-            <SectionTitle title="Results and analysis" subtitle="Add comments and an image for each result to explain the numbers." accent={accent} />
-            <div className="space-y-5">
+            <SectionTitle title="Results" subtitle="What was achieved under each result, with the evidence in numbers." accent={accent} />
+            <div className="space-y-6">
               {ordered.filter((r) => chosen(r.id)).map((r) => {
                 const inds = rows.filter((x) => x.result.id === r.id);
-                const a = analysis[r.id] || {};
+                const bars = inds
+                  .filter((x) => x.target !== undefined)
+                  .map((x) => {
+                    const status = x.saved?.status;
+                    return {
+                      id: x.ind.id,
+                      label: x.ind.name,
+                      pct: x.pct,
+                      value:
+                        x.pct !== null
+                          ? `${fmt(x.saved.actual)} of ${fmt(x.target)} (${x.pct}%)`
+                          : status === "submitted"
+                            ? "Awaiting approval"
+                            : status === "rejected"
+                              ? "Rejected"
+                              : "Not reported",
+                      color: x.pct !== null ? PROGRESS[x.progress]?.color || "#1F7A5C" : "#DDDDE0",
+                    };
+                  });
+                const splits = inds
+                  .filter((x) => x.saved?.status === "approved")
+                  .flatMap((x) => breakdownData(x.saved).slice(0, 1).map((b) => ({ key: `${x.ind.id}-${b.id}`, title: `${x.ind.name}, by ${b.name.toLowerCase()}`, parts: b.parts })));
+                const image = images[r.id];
                 return (
-                  <div key={r.id} className="break-inside-avoid rounded-lg border border-[#EAECF0] p-4">
+                  <div key={r.id} className="break-inside-avoid">
                     <h4 className="text-sm font-semibold text-[#101828]">{r.title}</h4>
-                    <p className="text-xs text-[#98A2B3]">{fw.levels?.[r.level] ?? `Level ${r.level + 1}`}</p>
+                    <p className="mb-2 text-xs text-[#98A2B3]">{fw.levels?.[r.level] ?? `Level ${r.level + 1}`}</p>
+                    {narrative(`result-${r.id}`, resultText(r, inds), 5)}
 
-                    {inds.length > 0 && (
-                      <ul className="mt-3 divide-y divide-[#F2F4F7] text-sm">
-                        {inds.map(({ ind, saved, target, pct, progress }) => {
-                          const lines = saved?.status === "approved" ? breakdownLines(saved) : [];
-                          const evidenceCount = (saved?.evidence || []).length;
-                          return (
-                            <li key={ind.id} className="py-2">
-                              <div className="flex flex-wrap items-center gap-x-3 text-[#344054]">
-                                <span className="min-w-0 flex-1">{ind.name}</span>
-                                <span className="tabular-nums text-[#667085]">
-                                  {saved?.status === "approved" ? fmt(saved.actual) : "-"} / {fmt(target)}
-                                </span>
-                                <ProgressDot progress={progress} pct={pct} />
-                              </div>
-                              {(lines.length > 0 || evidenceCount > 0) && (
-                                <p className="mt-1 text-xs leading-5 text-[#667085]">
-                                  {lines.map((l) => `${l.name}: ${l.parts.join(", ")}`).join(" · ")}
-                                  {lines.length > 0 && evidenceCount > 0 ? " · " : ""}
-                                  {evidenceCount > 0 ? plural(evidenceCount, "piece of evidence", "pieces of evidence") : ""}
-                                </p>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
+                    {bars.length > 0 && (
+                      <div className="mt-3">
+                        <IndicatorBars items={bars} />
+                        <Caption n={nextFig()}>Share of target reached by each indicator under {r.title}, {period}.</Caption>
+                      </div>
                     )}
 
-                    <label className="mt-3 block text-xs font-medium text-[#667085] print:hidden" htmlFor={`an-${r.id}`}>Analysis</label>
-                    <textarea
-                      id={`an-${r.id}`}
-                      rows={3}
-                      value={a.text || ""}
-                      onChange={(e) => setText(r.id, e.target.value)}
-                      placeholder="What explains these results? What should the reader know?"
-                      className={`${FIELD} mt-1 w-full print:hidden`}
-                    />
-                    {a.text && <p className="mt-3 hidden whitespace-pre-wrap text-sm text-[#344054] print:block">{a.text}</p>}
+                    {splits.length > 0 && (
+                      <div className="mt-3 space-y-3">
+                        {splits.map((s) => (
+                          <SplitBar key={s.key} title={s.title} parts={s.parts} />
+                        ))}
+                        <Caption n={nextFig()}>Who was reached, by breakdown, under {r.title}.</Caption>
+                      </div>
+                    )}
 
-                    {a.image ? (
+                    {image ? (
                       <div className="mt-3">
-                        <img src={a.image} alt={`Illustration for ${r.title}`} className="max-h-64 rounded-md border border-[#EAECF0]" />
+                        <img src={image} alt={`Illustration for ${r.title}`} className="max-h-64 rounded-md border border-[#EAECF0]" />
                         <button type="button" onClick={() => removeImage(r.id)} className="mt-1 text-xs font-medium text-[#B42318] hover:underline print:hidden">Remove image</button>
                       </div>
                     ) : (
@@ -758,41 +928,38 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
           </section>
         )}
 
-        {sections.quality && (
+        {sections.outlook && (
           <section className="break-inside-avoid">
-            <SectionTitle title="Data notes" subtitle="What the reader should know about the completeness of the data." accent={accent} />
-            {awaiting.length + rejected.length + missing.length === 0 ? (
-              <p className="text-sm text-[#344054]">Every indicator with a target has an approved value for {period}.</p>
-            ) : (
-              <ul className="space-y-2 text-sm text-[#344054]">
-                {awaiting.length > 0 && (
-                  <li>
-                    <strong>{plural(awaiting.length, "value is", "values are")} awaiting approval</strong> and not counted
-                    {corrections.length ? `, including ${plural(corrections.length, "correction", "corrections")} to earlier approved values` : ""}:{" "}
-                    <span className="text-[#667085]">{awaiting.slice(0, 6).map((r) => r.ind.name).join("; ")}{awaiting.length > 6 ? `; and ${awaiting.length - 6} more` : ""}.</span>
-                  </li>
-                )}
-                {rejected.length > 0 && (
-                  <li>
-                    <strong>{plural(rejected.length, "value was", "values were")} rejected</strong> and needs correcting:{" "}
-                    <span className="text-[#667085]">{rejected.slice(0, 6).map((r) => r.ind.name).join("; ")}.</span>
-                  </li>
-                )}
-                {missing.length > 0 && (
-                  <li>
-                    <strong>{plural(missing.length, "indicator has", "indicators have")} not been reported:</strong>{" "}
-                    <span className="text-[#667085]">{missing.slice(0, 6).map((r) => r.ind.name).join("; ")}{missing.length > 6 ? `; and ${missing.length - 6} more` : ""}.</span>
-                  </li>
-                )}
-              </ul>
+            <SectionTitle title="Outlook" subtitle="Where the project is heading by its last period, at the pace reached so far." accent={accent} />
+            {narrative("outlook", outlookText(), 3)}
+            {outlook.list.length > 0 && (
+              <div className="mt-3">
+                <IndicatorBars
+                  items={outlook.list.slice(0, 10).map((o) => ({
+                    id: o.ind.id,
+                    label: o.ind.name,
+                    pct: o.ratio,
+                    value: `${o.ratio}% projected`,
+                    color: PROGRESS[progressOf(o.ratio)]?.color || "#1F7A5C",
+                  }))}
+                />
+                <Caption n={nextFig()}>Projected share of the final target for each indicator{outlook.list.length > 10 ? " (the ten furthest behind)" : ""}.</Caption>
+              </div>
             )}
           </section>
         )}
 
+        {sections.quality && (
+          <section className="break-inside-avoid">
+            <SectionTitle title="Data notes" subtitle="What the reader should know about the completeness of the data." accent={accent} />
+            {narrative("quality", dataNotesText(), 4)}
+          </section>
+        )}
+
         {sections.recs && (
-          <section className={recs ? "" : "print:hidden"}>
+          <section>
             <SectionTitle title="Next steps" subtitle="Recommended follow-up for the next period." accent={accent} />
-            <WriteBox id="recs" value={recs} onChange={setRecs} rows={5} placeholder="Write the recommended next steps." />
+            {narrative("recs", recsAuto, 5)}
             <div className="mt-2 flex flex-wrap gap-2 print:hidden">
               <button
                 type="button"
@@ -803,8 +970,8 @@ function VisualReport({ fw, frameworkId, data, ordered, rows, period, brand, set
                     "recs",
                     "recommendations",
                     "Suggest three to five practical next steps for the next reporting period, based only on these figures. Write them as short plain paragraphs.",
-                    recs,
-                    setRecs
+                    overrides.recs || "",
+                    (answer) => setOverrides((o) => ({ ...o, recs: answer }))
                   )
                 }
               >

@@ -59,6 +59,10 @@ const OUTLOOK = {
 };
 const fmt = (n) => (n === undefined || n === null ? "-" : Number(n).toLocaleString());
 
+/* Scroll to a section of this page once it has rendered */
+const goTo = (id) =>
+  setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+
 function SectionHead({ title, subtitle }) {
   return (
     <div className="mb-4">
@@ -189,6 +193,8 @@ function PortfolioView() {
   const [unit, setUnit] = useState("");
   const [groupBy, setGroupBy] = useState("");
   const [query, setQuery] = useState("");
+  /* Which projects the list shows: all, only shared, or only not shared (set by the summary tiles too) */
+  const [shareFilter, setShareFilter] = useState("all");
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
   const [typeName, setTypeName] = useState("");
@@ -452,8 +458,9 @@ function PortfolioView() {
     const q = query.trim().toLowerCase();
     const matches = projects.filter(
       (p) =>
-        !q ||
-        [p.name, p.donor, p.theme, p.focusArea, p.partner, p.region, p.area].some((v) => String(v ?? "").toLowerCase().includes(q))
+        (shareFilter === "all" || (shareFilter === "shared") === Boolean(p.shared)) &&
+        (!q ||
+          [p.name, p.donor, p.theme, p.focusArea, p.partner, p.region, p.area].some((v) => String(v ?? "").toLowerCase().includes(q)))
     );
     if (!groupBy) return [{ label: null, items: matches }];
 
@@ -470,10 +477,55 @@ function PortfolioView() {
         const avgPct = rated.length ? Math.round(rated.reduce((n, p) => n + p.avgPct, 0) / rated.length) : null;
         return { label, items, avgPct };
       });
-  }, [projects, groupBy, query]);
+  }, [projects, groupBy, query, shareFilter]);
 
   const visibleCount = groups.reduce((n, g) => n + g.items.length, 0);
   const groupLabel = GROUP_BY.find((g) => g.key === groupBy)?.label.toLowerCase();
+
+  /* The summary tiles: each one jumps to the part of the page it counts */
+  const tiles = [
+    {
+      label: "Strategic indicators",
+      value: strategic.length,
+      onClick: () => goTo("strategic-indicators"),
+      hint: "Go to strategic indicators",
+    },
+    {
+      label: PS_CAP,
+      value: projects.length,
+      onClick: () => {
+        setShareFilter("all");
+        setQuery("");
+        goTo("portfolio-projects");
+      },
+      hint: `Show all ${PS}`,
+    },
+    {
+      label: `Shared ${PS}`,
+      value: sharedCount,
+      active: shareFilter === "shared",
+      onClick: () => {
+        setShareFilter("shared");
+        goTo("portfolio-projects");
+      },
+      hint: `Show only shared ${PS}`,
+    },
+    {
+      label: "Linked indicators",
+      value: linkedCount,
+      onClick: () => {
+        setOpen(Object.fromEntries(strategic.filter((s) => s.linked.length > 0).map((s) => [s.id, true])));
+        goTo("strategic-indicators");
+      },
+      hint: "Open the strategic indicators that have links",
+    },
+    {
+      label: "Awaiting approval",
+      value: pendingCount,
+      onClick: () => goTo("awaiting-approval"),
+      hint: "Go to values awaiting approval",
+    },
+  ];
 
   const projectRows = (p) => (
     <Fragment key={p.id}>
@@ -597,22 +649,31 @@ function PortfolioView() {
         )}
       </div>
 
-      <dl className={`${CARD} grid divide-y divide-[#EEF0F4] sm:grid-cols-5 sm:divide-x sm:divide-y-0`}>
-        {[
-          ["Strategic indicators", strategic.length],
-          [PS_CAP, projects.length],
-          [`Shared ${PS}`, sharedCount],
-          ["Linked indicators", linkedCount],
-          ["Awaiting approval", pendingCount],
-        ].map(([label, value]) => (
-          <div key={label} className="p-5">
-            <dt className="text-[13px] font-medium text-[#667085]">{label}</dt>
-            <dd className="mt-1 text-[28px] font-semibold leading-9 tracking-tight tabular-nums text-[#101828]">{fmt(value)}</dd>
-          </div>
+      {/* Summary: each tile takes you to the part of the page it counts */}
+      <div
+        role="group"
+        aria-label="Portfolio summary"
+        className={`${CARD} grid divide-y divide-[#EEF0F4] overflow-hidden sm:grid-cols-5 sm:divide-x sm:divide-y-0`}
+      >
+        {tiles.map((t) => (
+          <button
+            key={t.label}
+            type="button"
+            onClick={t.onClick}
+            title={t.hint}
+            aria-label={`${t.label}: ${fmt(t.value)}. ${t.hint}`}
+            aria-pressed={t.active === undefined ? undefined : t.active}
+            className={`p-5 text-left transition hover:bg-[#F9FAFB] focus-visible:-outline-offset-2 ${FOCUS} ${t.active ? "bg-[#F5F2FD]" : ""}`}
+          >
+            <span className="block text-[13px] font-medium text-[#667085]">{t.label}</span>
+            <span className="mt-1 block text-[28px] font-semibold leading-9 tracking-tight tabular-nums text-[#101828]">
+              {fmt(t.value)}
+            </span>
+          </button>
         ))}
-      </dl>
+      </div>
 
-      <section aria-label="Awaiting approval" className={`${CARD} overflow-hidden`}>
+      <section id="awaiting-approval" aria-label="Awaiting approval" className={`${CARD} scroll-mt-4 overflow-hidden`}>
         <div className="px-6 pt-6">
           <SectionHead
             title="Awaiting approval"
@@ -804,7 +865,7 @@ function PortfolioView() {
         </p>
       </section>
 
-      <section aria-label="Strategic indicators" className={`${CARD} p-6`}>
+      <section id="strategic-indicators" aria-label="Strategic indicators" className={`${CARD} scroll-mt-4 p-6`}>
         <SectionHead
           title="Strategic indicators"
           subtitle={`Values are added together across shared ${PS}, so this suits countable indicators such as people reached. Share an ${P} below, then link its indicators.`}
@@ -1124,7 +1185,7 @@ function PortfolioView() {
         )}
       </section>
 
-      <section aria-label={PS_CAP} className={`${CARD} overflow-hidden`}>
+      <section id="portfolio-projects" aria-label={PS_CAP} className={`${CARD} scroll-mt-4 overflow-hidden`}>
         <div className="px-6 pt-6">
           <SectionHead
             title={PS_CAP}
@@ -1140,6 +1201,14 @@ function PortfolioView() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search by name, donor, theme, partner or region"
               />
+            </label>
+            <label className="w-40 text-xs font-medium text-[#475467]">
+              Sharing
+              <select className={`${FIELD} mt-1 block w-full`} value={shareFilter} onChange={(e) => setShareFilter(e.target.value)}>
+                <option value="all">All {PS}</option>
+                <option value="shared">Shared only</option>
+                <option value="not-shared">Not shared only</option>
+              </select>
             </label>
             <label className="w-44 text-xs font-medium text-[#475467]">
               Group by
@@ -1165,7 +1234,19 @@ function PortfolioView() {
         {projects.length === 0 ? (
           <p className="px-6 pb-10 text-center text-sm text-[#667085]">No {PS} yet.</p>
         ) : visibleCount === 0 ? (
-          <p className="px-6 pb-10 text-center text-sm text-[#667085]">No {PS} match “{query}”. Clear the filter to see all {PS}.</p>
+          <p className="px-6 pb-10 text-center text-sm text-[#667085]">
+            No {PS} match the current filters.{" "}
+            <button
+              type="button"
+              className="font-medium text-[#5B3FD0] hover:underline"
+              onClick={() => {
+                setQuery("");
+                setShareFilter("all");
+              }}
+            >
+              Show all {PS}
+            </button>
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[960px] text-left text-sm">

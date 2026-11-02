@@ -29,6 +29,7 @@ import MEDashboard from "./pages/admin/MEDashboard";
 // Projects: the list (current to previous) and the dashboard of the project you open
 import MEProjects from "./pages/admin/me-dashboard/ProjectsPage";
 import MEFrameworks from "./pages/admin/me-dashboard/Frameworks";
+import ImportFramework from "./pages/admin/me-dashboard/ImportFramework";
 import MEIndicators from "./pages/admin/me-dashboard/Indicators";
 import MELibrary from "./pages/admin/me-dashboard/Library";
 import MEForms from "./pages/admin/me-dashboard/Forms";
@@ -39,6 +40,14 @@ import MEInsights from "./pages/admin/me-dashboard/Insights";
 import MEReports from "./pages/admin/me-dashboard/Reports";
 import MEPredictions from "./pages/admin/me-dashboard/Predictions";
 import MEGuides from "./pages/admin/me-dashboard/Guides";
+// Workplan and calendar
+import MEWorkPlan from "./pages/admin/me-dashboard/WorkPlan";
+import MECalendar from "./pages/admin/me-dashboard/MECalendar";
+import AuditLog from "./pages/admin/me-dashboard/AuditTrail";
+// Attendance (fingerprint clock in and out, and leave)
+import Attendance from "./pages/attendance/Attendance";
+// Travel and field requests
+import Travel from "./pages/travel/Travel";
 // Approvals and the portfolio roll-up (administrator only). Adjust the path to where the file lives.
 import PortfolioView from "./pages/admin/PortfolioView";
 
@@ -77,17 +86,28 @@ function App() {
         />
 
         {/* =====================================================
-            HOME (first page after sign-in)
-            Lets people start in the M&E dashboard or in the files.
+            SHARED SHELL (sidebar and header)
+            Home, Attendance, Travel and M&E sit under ONE layout route, so the
+            sidebar stays mounted while moving between them. Before, each page
+            built its own shell, so the sidebar was torn down and rebuilt on
+            every click (it "popped" in and out and forgot which menus were open).
+            Add new staff pages inside this route.
         ====================================================== */}
         <Route
-          path="/home"
           element={
             <ProtectedRoute>
-              <PageShell>{() => <Home />}</PageShell>
+              <PageShell>{() => <Outlet />}</PageShell>
             </ProtectedRoute>
           }
-        />
+        >
+          {/* HOME (first page after sign-in): start in the M&E dashboard or in the files */}
+          <Route path="/home" element={<Home />} />
+
+          {/* ATTENDANCE: fingerprint clock in and out, and leave. Administrators also get a Team tab. */}
+          <Route path="/attendance" element={<Attendance />} />
+
+          {/* TRAVEL AND FIELD REQUESTS: staff request trips; administrators and the CEO approve them. */}
+          <Route path="/travel" element={<Travel />} />
 
         {/* =====================================================
             M&E (staff and administrator)
@@ -97,20 +117,17 @@ function App() {
             stays mounted while moving between M&E pages.
             Sidebar links must match these paths exactly.
         ====================================================== */}
-        <Route
-          path="/me-dashboard"
-          element={
-            <ProtectedRoute>
-              <PageShell>{() => <Outlet />}</PageShell>
-            </ProtectedRoute>
-          }
-        >
+        <Route path="/me-dashboard" element={<Outlet />}>
           <Route index element={<MEDashboard />} />
 
           {/* Projects: the list, and a project's dashboard (opened with ?project=<id>) */}
           <Route path="projects" element={<MEProjects />} />
 
           <Route path="frameworks" element={<MEFrameworks />} />
+
+          {/* Import a framework (or all the details of a project) from a file.
+              The API decides who can import where, so this page is open to any signed-in user. */}
+          <Route path="import-framework" element={<ImportFramework />} />
 
           {/* Indicators */}
           <Route path="indicators" element={<MEIndicators />} />
@@ -125,6 +142,21 @@ function App() {
           {/* Data: indicator data, and tables for importing and linking data */}
           <Route path="data" element={<MEData />} />
           <Route path="data-tables" element={<DataTables />} />
+
+          {/* Workplan and calendar: activities with owners and dates, and a
+              calendar that shows them alongside meetings, trainings and deadlines */}
+          <Route path="workplan" element={<MEWorkPlan />} />
+          <Route path="calendar" element={<MECalendar />} />
+
+          {/* Audit trail (administrator only, the API enforces it too) */}
+          <Route
+            path="audit"
+            element={
+              <ProtectedRoute requireAdmin>
+                <AuditLog />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Approvals and portfolio (administrator only, the API enforces it too) */}
           <Route
@@ -143,6 +175,7 @@ function App() {
 
           {/* Unknown M&E URLs go back to the M&E dashboard */}
           <Route path="*" element={<Navigate to="/me-dashboard" replace />} />
+        </Route>
         </Route>
 
         {/* =====================================================

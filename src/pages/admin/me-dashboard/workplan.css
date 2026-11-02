@@ -1,0 +1,47 @@
+/* Neutral styles: adjust colors to match the portal's existing theme */
+.wp { padding: 1.5rem; max-width: 1200px; }
+.wp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.wp-head h2 { margin: 0; }
+.wp-error { background: #fdecea; color: #8a1c14; padding: .6rem .8rem; border-radius: 6px; }
+.wp-empty { color: #666; padding: 1.5rem 0; }
+.wp-sub { font-size: .8rem; color: #666; margin-top: .2rem; }
+
+.wp-form { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.25rem; }
+.wp-form input, .wp-form select, .wp-head select {
+  padding: .45rem .6rem; border: 1px solid #c9ced6; border-radius: 6px; font: inherit;
+}
+.wp-form input[type="number"] { width: 5rem; }
+.wp-form button, .wp-actions button {
+  padding: .45rem .8rem; border: 1px solid #2d5fa8; background: #2d5fa8; color: #fff;
+  border-radius: 6px; cursor: pointer; font: inherit;
+}
+.wp-form button[type="button"], .wp-actions button { background: #fff; color: #2d5fa8; }
+.wp-form button:disabled { opacity: .6; cursor: default; }
+.wp button:focus-visible, .wp input:focus-visible, .wp select:focus-visible {
+  outline: 2px solid #2d5fa8; outline-offset: 2px;
+}
+
+.wp-table-wrap { overflow-x: auto; }
+.wp-table { width: 100%; border-collapse: collapse; }
+.wp-table th, .wp-table td { text-align: left; padding: .6rem .5rem; border-bottom: 1px solid #e3e6eb; vertical-align: top; }
+.wp-timeline-col { min-width: 260px; }
+.wp-actions { white-space: nowrap; }
+.wp-actions button { margin-right: .3rem; padding: .25rem .6rem; }
+
+.wp-track { position: relative; height: 12px; background: #eef1f5; border-radius: 6px; }
+.wp-bar { position: absolute; top: 0; height: 100%; background: #a9c3e8; border-radius: 6px; overflow: hidden; }
+.wp-fill { height: 100%; background: #2d5fa8; }
+
+.wp-status { padding: .15rem .5rem; border-radius: 999px; font-size: .8rem; background: #eef1f5; }
+.wp-status.in-progress { background: #dbe8fb; }
+.wp-status.done { background: #d9f2e1; }
+.wp-status.delayed { background: #fde3d6; }
+
+.wp-cal { height: 620px; }
+.cal-activity { background-color: #2d5fa8 !important; }
+.cal-event { background-color: #6b7a8f !important; }
+
+@media (max-width: 700px) {
+  .wp { padding: 1rem; }
+  .wp-cal { height: 520px; }
+}
