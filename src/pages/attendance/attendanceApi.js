@@ -1,67 +1,67 @@
-
-import { getCognitoSession } from "../../components/api.js";
-// API and fingerprint (WebAuthn) helpers for staff attendance.
-// The browser never sees the fingerprint. The device checks it locally
-// and returns a signed proof that the API verifies.
+// API and fingerprint (WebAuthn) helpers for EACHRights staff attendance.
+// The fingerprint is verified locally by the device. The API verifies the
+// signed WebAuthn proof; the browser never receives fingerprint data.
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
   "https://8w80mrmztc.execute-api.eu-north-1.amazonaws.com"
 ).replace(/\/+$/, "");
 
-// Use the same Cognito session as the rest of the portal.
-async function getToken() {
-  const session = await getCognitoSession();
-  return session.getIdToken().getJwtToken();
-}
+// IMPORTANT: this must read the same place your login code saves the token
+// (the same key workplanApi.js uses). If you see 401 on every request, open
+// DevTools > Application > Local Storage, find the key that holds the JWT,
+// and put its name first in this list.
+const TOKEN_KEYS = ["token", "authToken", "accessToken", "idToken", "jwt"];
+
+const getToken = () => {
+  for (const store of [localStorage, sessionStorage]) {
+    for (const key of TOKEN_KEYS) {
+      const value = store.getItem(key);
+      if (value && value !== "null" && value !== "undefined") {
+        return value.replace(/^Bearer\s+/i, "");
+      }
+    }
+  }
+  return null;
+};
 
 async function call(path, options = {}) {
-  const token = await getToken();
-
-  const { method = "GET", body, headers = {} } = options;
+  const token = getToken();
 
   const res = await fetch(`${BASE}${path}`, {
-    method,
+    ...options,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...headers,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
     },
-    body,
   });
 
   if (res.status === 204) return null;
 
-  const type = res.headers.get("content-type") || "";
+  if (res.status === 401) {
+    const err = new Error(
+      token
+        ? "Your session has expired or the server rejected your sign-in. Please sign in again."
+        : "You are not signed in. Please sign in again."
+    );
+    err.code = "UNAUTHORIZED";
+    throw err;
+  }
 
-  if (!type.includes("application/json")) {
-    const responseText = await res.text();
+  const contentType = res.headers.get("content-type") || "";
 
-    console.error("Attendance API returned non-JSON:", {
-      url: `${BASE}${path}`,
-      status: res.status,
-      contentType: type,
-      response: responseText.slice(0, 500),
-    });
-
+  if (!contentType.includes("application/json")) {
     throw new Error(
-      "The attendance API returned a web page instead of JSON. Check the API URL and Lambda attendance route configuration."
+      "The API returned a web page instead of data. Check VITE_API_BASE_URL in .env, then restart npm run dev."
     );
   }
 
   const data = await res.json();
 
-  if (res.status === 401) {
-    throw new Error("Your session has expired. Please sign in again.");
-  }
-
   if (!res.ok) {
-    const err = new Error(
-      data.message || data.error || `Request failed (${res.status})`
-    );
-
+    const err = new Error(data.message || `Request failed (${res.status})`);
     if (data.code) err.code = data.code;
-
     throw err;
   }
 
@@ -70,21 +70,23 @@ async function call(path, options = {}) {
 
 /* ---------- Base64URL helpers ---------- */
 
-const enc = (buf) =>
-  btoa(String.fromCharCode(...new Uint8Array(buf)))
+const enc = (buffer) =>
+  btoa(String.fromCharCode(...new Uint8Array(buffer)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-const dec = (s) => {
+const dec = (value) => {
   const padded =
-    s.replace(/-/g, "+").replace(/_/g, "/") +
-    "=".repeat((4 - (s.length % 4)) % 4);
+    value.replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (value.length % 4)) % 4);
 
-  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)).buffer;
+  return Uint8Array.from(atob(padded), (char) =>
+    char.charCodeAt(0)
+  ).buffer;
 };
 
-/* ---------- Capability checks ---------- */
+/* ---------- WebAuthn capability checks ---------- */
 
 // WebAuthn requires HTTPS or localhost and a supported browser.
 export const fingerprintSupported = () =>
@@ -103,15 +105,63 @@ export const platformAvailable = async () => {
   }
 };
 
-/* ---------- Attendance API ---------- */
+/* ---------- Attendance status ---------- */
 
 export const getStatus = () =>
   call("/me/attendance/status");
 
-export const removeDevice = (id) =>
-  call(`/me/attendance/credentials/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
+/* ---------- Administrator phone approvals ---------- */
+
+// Fetches every device request (pending, approved, rejected, revoked)
+// and always returns a plain array, whether the API sends [..] or { items: [..] }.
+async function fetchDeviceRequests() {
+  const result = await call("/me/attendance/device-requests");
+  return Array.isArray(result) ? result : result?.items || [];
+}
+
+// Pending requests only, as an array.
+// If your backend uses a different status name (e.g. "pending_approval"),
+// change the check below to match.
+export async function listDeviceRequests() {
+  const items = await fetchDeviceRequests();
+  return items.filter((r) => !r.status || r.status === "pending");
+}
+
+// Approved phones, taken from the same device-requests list.
+// Resolves to [] when there are none. If the request fails it throws,
+// and the Phones tab then shows its "isn't available yet" message.
+export async function listApprovedDevices() {
+  const items = await fetchDeviceRequests();
+  return items.filter((r) => r.status === "approved");
+}
+
+// decision must be "approved" or "rejected".
+export const decideDeviceRequest = (
+  requestId,
+  { decision, note } = {}
+) =>
+  call(
+    `/me/attendance/device-requests/${encodeURIComponent(requestId)}/decision`,
+    {
+      method: "POST",
+      body: JSON.stringify({ decision, note }),
+    }
+  );
+
+// Administrator-only action.
+// Revokes a staff member's approved WebAuthn credential.
+export const revokeDevice = (userId, credentialId) =>
+  call(
+    `/me/attendance/admin-credentials/${encodeURIComponent(userId)}/${encodeURIComponent(credentialId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+
+// Kept so any older code importing the previous name still works.
+export const adminRevokeDevice = revokeDevice;
+
+/* ---------- Attendance records ---------- */
 
 const listRecords = ({
   scope = "me",
@@ -120,30 +170,30 @@ const listRecords = ({
   cursor,
   limit,
 } = {}) => {
-  const p = new URLSearchParams({ scope });
+  const params = new URLSearchParams({ scope });
 
-  if (from) p.set("from", from);
-  if (to) p.set("to", to);
-  if (cursor) p.set("cursor", cursor);
-  if (limit) p.set("limit", String(limit));
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (cursor) params.set("cursor", cursor);
+  if (limit) params.set("limit", String(limit));
 
-  return call(`/me/attendance/records?${p.toString()}`);
+  return call(`/me/attendance/records?${params.toString()}`);
 };
 
-// Follows pagination cursors, up to 10 pages.
+// Retrieves up to 10 pages of 500 records each.
 export async function listAllRecords(params = {}) {
   let items = [];
   let cursor = null;
 
   for (let page = 0; page < 10; page += 1) {
-    const res = await listRecords({
+    const result = await listRecords({
       ...params,
       cursor,
       limit: 500,
     });
 
-    items = items.concat(res?.items || []);
-    cursor = res?.cursor || null;
+    items = items.concat(result?.items || []);
+    cursor = result?.cursor || null;
 
     if (!cursor) break;
   }
@@ -154,43 +204,44 @@ export async function listAllRecords(params = {}) {
 /* ---------- Leave ---------- */
 
 const query = (params = {}) => {
-  const p = new URLSearchParams();
+  const search = new URLSearchParams();
 
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
-      p.set(key, String(value));
+      search.set(key, String(value));
     }
   });
 
-  return p.toString();
+  return search.toString();
 };
 
-// Approved leave for the calendar and staff leave list.
+// Approved leave.
+// scope "all" returns everyone; scope "me" returns the signed-in user.
 export async function listLeave({
   scope = "all",
   from,
   to,
 } = {}) {
-  const res = await call(
+  const result = await call(
     `/me/leave/away?${query({ scope, from, to })}`
   );
 
-  return res?.items || [];
+  return result?.items || [];
 }
 
-// Leave requests and their statuses.
+// Leave requests and their status.
 export async function listLeaveRequests({
   scope = "me",
   status,
 } = {}) {
-  const res = await call(
+  const result = await call(
     `/me/leave/requests?${query({ scope, status })}`
   );
 
-  return res?.items || [];
+  return result?.items || [];
 }
 
-// Request leave: { type, from, to, reason }
+// Submit a leave request: { type, from, to, reason }
 export const requestLeave = (request) =>
   call("/me/leave/requests", {
     method: "POST",
@@ -203,8 +254,11 @@ export const cancelLeave = (id) =>
     method: "DELETE",
   });
 
-// Administrators and CEO: decision is "approved" or "rejected".
-export const decideLeave = (id, { decision, note } = {}) =>
+// Administrator/CEO leave decision.
+export const decideLeave = (
+  id,
+  { decision, note } = {}
+) =>
   call(
     `/me/leave/requests/${encodeURIComponent(id)}/decision`,
     {
@@ -215,7 +269,7 @@ export const decideLeave = (id, { decision, note } = {}) =>
 
 /* ---------- Scanner setup (administrator) ---------- */
 
-// Returns { items: [{ scannerId, name, email }] }
+// Returns { items: [{ scannerId, name, email }] }.
 export const listStaffLinks = () =>
   call("/me/attendance/staff-links");
 
@@ -234,9 +288,10 @@ export const deleteStaffLink = (scannerId) =>
     }
   );
 
-// Import scanner punches in chunks.
-export async function importPunches(punches) {
-  const CHUNK = 500;
+// punches = [{ scannerId, at }]
+// at must be an ISO timestamp.
+export async function importPunches(punches = []) {
+  const CHUNK_SIZE = 500;
 
   const total = {
     accepted: 0,
@@ -244,67 +299,90 @@ export async function importPunches(punches) {
     rejectedCount: 0,
   };
 
-  for (let i = 0; i < punches.length; i += CHUNK) {
-    const res = await call("/me/attendance/import", {
+  for (let index = 0; index < punches.length; index += CHUNK_SIZE) {
+    const result = await call("/me/attendance/import", {
       method: "POST",
       body: JSON.stringify({
-        punches: punches.slice(i, i + CHUNK),
+        punches: punches.slice(index, index + CHUNK_SIZE),
       }),
     });
 
-    total.accepted += res?.accepted || 0;
-    total.duplicates += res?.duplicates || 0;
-    total.rejectedCount += res?.rejectedCount || 0;
+    total.accepted += result?.accepted || 0;
+    total.duplicates += result?.duplicates || 0;
+    total.rejectedCount += result?.rejectedCount || 0;
   }
 
   return total;
 }
 
-/* ---------- Fingerprint registration ---------- */
+/* ---------- WebAuthn device registration ---------- */
 
-// Register this device using its platform authenticator.
+// Registers the current device.
+// New registrations must remain pending until an administrator approves.
 export async function registerDevice(label) {
-  const opts = await call("/me/attendance/register/options", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
+  if (!fingerprintSupported()) {
+    throw new Error(
+      "Secure WebAuthn is not available. Use HTTPS and an updated browser."
+    );
+  }
 
-  const cred = await navigator.credentials.create({
+  const available = await platformAvailable();
+
+  if (!available) {
+    throw new Error(
+      "This device does not have an available platform authenticator. Check its fingerprint, face recognition or device security settings."
+    );
+  }
+
+  const options = await call(
+    "/me/attendance/register/options",
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
+
+  const credential = await navigator.credentials.create({
     publicKey: {
-      challenge: dec(opts.challenge),
-      rp: opts.rp,
+      challenge: dec(options.challenge),
+      rp: options.rp,
       user: {
-        id: dec(opts.user.id),
-        name: opts.user.name,
-        displayName: opts.user.displayName,
+        id: dec(options.user.id),
+        name: options.user.name,
+        displayName: options.user.displayName,
       },
       pubKeyCredParams: [
-        { type: "public-key", alg: -7 },
-        { type: "public-key", alg: -257 },
+        { type: "public-key", alg: -7 },   // ES256
+        { type: "public-key", alg: -257 }, // RS256
       ],
       authenticatorSelection: {
         authenticatorAttachment: "platform",
         userVerification: "required",
         residentKey: "discouraged",
       },
-      excludeCredentials: (opts.excludeCredentials || []).map((id) => ({
-        type: "public-key",
-        id: dec(id),
-      })),
+      excludeCredentials: (options.excludeCredentials || []).map(
+        (id) => ({
+          type: "public-key",
+          id: dec(id),
+        })
+      ),
       attestation: "none",
       timeout: 60000,
     },
   });
 
-  if (!cred) {
-    throw new Error("Fingerprint registration was cancelled.");
+  if (!credential) {
+    throw new Error("Device registration was cancelled.");
   }
 
-  const r = cred.response;
+  const response = credential.response;
 
-  if (!r.getPublicKey || !r.getAuthenticatorData) {
+  if (
+    !response.getPublicKey ||
+    !response.getAuthenticatorData
+  ) {
     throw new Error(
-      "This browser is too old for fingerprint setup. Update Chrome, Edge, Safari or Firefox."
+      "This browser does not support the required WebAuthn features. Update Chrome, Edge, Safari or Firefox."
     );
   }
 
@@ -312,11 +390,11 @@ export async function registerDevice(label) {
     method: "POST",
     body: JSON.stringify({
       credential: {
-        id: cred.id,
-        clientDataJSON: enc(r.clientDataJSON),
-        authenticatorData: enc(r.getAuthenticatorData()),
-        publicKey: enc(r.getPublicKey()),
-        publicKeyAlg: r.getPublicKeyAlgorithm(),
+        id: credential.id,
+        clientDataJSON: enc(response.clientDataJSON),
+        authenticatorData: enc(response.getAuthenticatorData()),
+        publicKey: enc(response.getPublicKey()),
+        publicKeyAlg: response.getPublicKeyAlgorithm(),
         label,
       },
     }),
@@ -325,18 +403,38 @@ export async function registerDevice(label) {
 
 /* ---------- Clock in / clock out ---------- */
 
-// type is "in" or "out".
+// type must be "in" or "out".
+// The server verifies the WebAuthn signature and records server time.
 export async function punch(type) {
-  const opts = await call("/me/attendance/punch/options", {
-    method: "POST",
-    body: JSON.stringify({ type }),
-  });
+  if (!fingerprintSupported()) {
+    throw new Error(
+      "Secure WebAuthn is not available. Use HTTPS and an updated browser."
+    );
+  }
 
-  const cred = await navigator.credentials.get({
+  if (type !== "in" && type !== "out") {
+    throw new Error("Invalid attendance action.");
+  }
+
+  const options = await call(
+    "/me/attendance/punch/options",
+    {
+      method: "POST",
+      body: JSON.stringify({ type }),
+    }
+  );
+
+  if (!options.allowCredentials?.length) {
+    throw new Error(
+      "No approved phone is registered for this account. Register your device and wait for administrator approval."
+    );
+  }
+
+  const credential = await navigator.credentials.get({
     publicKey: {
-      challenge: dec(opts.challenge),
-      rpId: opts.rpId,
-      allowCredentials: (opts.allowCredentials || []).map((id) => ({
+      challenge: dec(options.challenge),
+      rpId: options.rpId,
+      allowCredentials: options.allowCredentials.map((id) => ({
         type: "public-key",
         id: dec(id),
       })),
@@ -345,21 +443,21 @@ export async function punch(type) {
     },
   });
 
-  if (!cred) {
-    throw new Error("Fingerprint verification was cancelled.");
+  if (!credential) {
+    throw new Error("Attendance verification was cancelled.");
   }
 
-  const r = cred.response;
+  const response = credential.response;
 
   return call("/me/attendance/punch", {
     method: "POST",
     body: JSON.stringify({
       type,
       credential: {
-        id: cred.id,
-        clientDataJSON: enc(r.clientDataJSON),
-        authenticatorData: enc(r.authenticatorData),
-        signature: enc(r.signature),
+        id: credential.id,
+        clientDataJSON: enc(response.clientDataJSON),
+        authenticatorData: enc(response.authenticatorData),
+        signature: enc(response.signature),
       },
     }),
   });

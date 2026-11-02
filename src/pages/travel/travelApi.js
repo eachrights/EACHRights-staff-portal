@@ -1,72 +1,138 @@
-// API helpers for travel and field requests (src/pages/travel/travelApi.js).
-const BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
-// Same token as attendanceApi.js and workplanApi.js
-const getToken = () => localStorage.getItem("token");
+// API helpers for travel and field requests
+// src/pages/travel/travelApi.js
 
-// Note: this is the same helper as in attendanceApi.js. When more modules exist, move it into one shared file.
+import { getCognitoSession } from "../../components/api.js";
+
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "https://8w80mrmztc.execute-api.eu-north-1.amazonaws.com"
+).replace(/\/+$/, "");
+
+if (!API_BASE) {
+  throw new Error("VITE_API_BASE_URL is missing from .env");
+}
+
+// Get the Cognito ID token from the signed-in session.
+async function getToken() {
+  const session = await getCognitoSession();
+
+  const token =
+    session?.getIdToken?.()?.getJwtToken?.() ||
+    session?.idToken?.toString?.() ||
+    session?.idToken ||
+    session?.accessToken?.toString?.() ||
+    session?.accessToken;
+
+  if (!token) {
+    throw new Error("Your session has expired. Please sign in again.");
+  }
+
+  return token;
+}
+
+// Shared API request helper.
 async function call(path, options = {}) {
-  const token = getToken();
-  const res = await fetch(`${BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+  const token = await getToken();
+
+  const url = `${API_BASE}${path}`;
+
+  const res = await fetch(url, {
     ...options,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options.headers || {}),
+    },
   });
 
   if (res.status === 204) return null;
 
-  const type = res.headers.get("content-type") || "";
-  if (!type.includes("json")) {
+  const contentType = res.headers.get("content-type") || "";
+  const responseText = await res.text();
+
+  let data;
+
+  if (contentType.includes("json")) {
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      throw new Error("The API returned invalid JSON.");
+    }
+  } else {
     throw new Error(
-      "The API returned a web page instead of data. Check VITE_API_URL in .env, then restart npm run dev."
+      `The API returned HTML or another non-JSON response (${res.status}). Check the API Gateway URL and travel routes.`
     );
   }
-  const data = await res.json();
+
   if (!res.ok) {
-    const err = new Error(data.message || `Request failed (${res.status})`);
+    const err = new Error(
+      data.message || data.error || `Request failed (${res.status})`
+    );
     err.code = data.code;
     err.status = res.status;
     throw err;
   }
+
   return data;
 }
 
-// Trip requests. scope "me" = my own. scope "all" = everyone's, for approvers only.
-// status is optional, e.g. "pending". Dates are "YYYY-MM-DD" Nairobi days. Resolves to
-// [{ id, userId, name, email, type, destination, purpose, from, to, estCost, status,
-//    decisionNote, decidedBy, decidedAt }]
-// where status is "pending" | "approved" | "rejected" | "cancelled".
+// List trip requests.
+// scope "me" = own requests.
+// scope "all" = all requests (authorised approvers only).
 export async function listTrips({ scope = "me", status } = {}) {
-  const p = new URLSearchParams({ scope });
-  if (status) p.set("status", status);
-  const res = await call(`/me/travel/trips?${p}`);
+  const params = new URLSearchParams({ scope });
+
+  if (status) params.set("status", status);
+
+  const res = await call(`/me/travel/trips?${params.toString()}`);
+
   return res?.items || [];
 }
 
-// Approved trips only, safe for every signed-in staff member to see (no costs).
-// scope "me" or "all". Resolves to [{ userId, name, email, type, destination, from, to }].
+// List approved trips.
+// scope "me" or "all".
 export async function listAway({ scope = "all", from, to } = {}) {
-  const p = new URLSearchParams({ scope });
-  if (from) p.set("from", from);
-  if (to) p.set("to", to);
-  const res = await call(`/me/travel/away?${p}`);
+  const params = new URLSearchParams({ scope });
+
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+
+  const res = await call(`/me/travel/away?${params.toString()}`);
+
   return res?.items || [];
 }
 
-// Staff ask to travel. The server records it as "pending" for the signed-in user.
-export const requestTrip = ({ type, destination, purpose, from, to, estCost }) =>
+// Submit a travel or field-trip request.
+export const requestTrip = ({
+  type,
+  destination,
+  purpose,
+  from,
+  to,
+  estCost,
+}) =>
   call("/me/travel/trips", {
     method: "POST",
-    body: JSON.stringify({ type, destination, purpose, from, to, estCost }),
+    body: JSON.stringify({
+      type,
+      destination,
+      purpose,
+      from,
+      to,
+      estCost,
+    }),
   });
 
-// Cancel my own request (pending, or approved and not started yet)
-export const cancelTrip = (id) => call(`/me/travel/trips/${encodeURIComponent(id)}`, { method: "DELETE" });
+// Cancel own trip request.
+export const cancelTrip = (id) =>
+  call(`/me/travel/trips/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 
-// Approvers only. decision is "approved" or "rejected"; note is optional.
-export const decideTrip = (id, { decision, note }) =>
+// Approve or reject a trip request.
+export const decideTrip = (id, { decision, note = "" }) =>
   call(`/me/travel/trips/${encodeURIComponent(id)}/decision`, {
     method: "POST",
     body: JSON.stringify({ decision, note }),

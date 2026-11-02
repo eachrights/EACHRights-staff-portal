@@ -10,7 +10,6 @@ import {
   registerDevice,
   punch,
   listAllRecords,
-  removeDevice,
   listStaffLinks,
   saveStaffLink,
   deleteStaffLink,
@@ -20,6 +19,10 @@ import {
   requestLeave,
   cancelLeave,
   decideLeave,
+  listDeviceRequests,
+  decideDeviceRequest,
+  listApprovedDevices,
+  revokeDevice,
 } from "./attendanceApi";
 
 /* ---------- time helpers (all shown in Nairobi time) ---------- */
@@ -485,22 +488,15 @@ function MyAttendance() {
     setMsg(null);
     try {
       await registerDevice(label);
-      setMsg({ ok: true, text: "Fingerprint set up. You can now clock in and out." });
+      setMsg({
+        ok: true,
+        text: "Phone registered. An administrator must approve it before you can clock in. It will show here once it is approved.",
+      });
       await loadStatus();
     } catch (e) {
       setMsg({ ok: false, text: friendly(e) });
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function onRemove(d) {
-    if (!window.confirm(`Remove "${d.label}"? You will need to set it up again to use it.`)) return;
-    try {
-      await removeDevice(d.id);
-      await loadStatus();
-    } catch (e) {
-      setMsg({ ok: false, text: e.message });
     }
   }
 
@@ -555,12 +551,21 @@ function MyAttendance() {
               This browser or device can&apos;t check fingerprints. Use a recent Chrome, Edge or Safari on a phone or
               laptop with a fingerprint reader, and open the portal over HTTPS.
             </p>
+          ) : !status.enrolled && status.pendingDevice ? (
+            <div>
+              <h3 className="text-lg font-medium">Waiting for approval</h3>
+              <p className="mt-1 text-sm text-[#667085]">
+                Your phone &ldquo;{status.pendingDevice.label}&rdquo; was registered on{" "}
+                {new Date(status.pendingDevice.createdAt).toLocaleDateString("en-GB")}. An administrator needs to
+                approve it before you can clock in. This page updates by itself once it is approved.
+              </p>
+            </div>
           ) : !status.enrolled ? (
             <>
               <h3 className="text-lg font-medium">Set up your fingerprint</h3>
               <p className="mt-1 text-sm text-[#667085]">
-                You do this once per device. Your phone or laptop checks your fingerprint itself. The portal never
-                sees or stores it.
+                Your phone or laptop checks your fingerprint itself. The portal never sees or stores it. An
+                administrator approves your phone once, and only one phone can be approved for each person.
               </p>
               <EnrolForm onEnrol={onEnrol} busy={busy} />
             </>
@@ -651,22 +656,13 @@ function MyAttendance() {
                     {d.lastUsedAt ? `, last used ${new Date(d.lastUsedAt).toLocaleDateString("en-GB")}` : ""}
                   </span>
                 </span>
-                <button
-                  className={`rounded-full p-2 text-[#667085] hover:bg-[#F1F3F2] hover:text-[#B42318] ${FOCUS}`}
-                  aria-label={`Remove ${d.label}`}
-                  onClick={() => onRemove(d)}
-                >
-                  <Trash2 size={16} />
-                </button>
+                <Chip text="Approved" cls="bg-[#E3F3EC] text-[#00664E]" />
               </li>
             ))}
           </ul>
-          {status.devices.length < status.maxDevices && (
-            <div className="mt-3 border-t border-[#EEF1F0] pt-3">
-              <p className="mb-2 text-xs text-[#667085]">Add another phone or laptop</p>
-              <EnrolForm onEnrol={onEnrol} busy={busy} compact />
-            </div>
-          )}
+          <p className="mt-3 text-xs text-[#667085]">
+            Only one phone can be approved for attendance. To replace it, contact IT or an administrator.
+          </p>
         </section>
       )}
     </>
@@ -1040,6 +1036,203 @@ function ScannerSetup() {
       </section>
       <StaffLinks />
       <ImportFile />
+    </>
+  );
+}
+
+/* ---------- phone approvals (administrator) ---------- */
+
+const when = (iso) =>
+  iso
+    ? new Date(iso).toLocaleString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: TZ,
+      })
+    : "-";
+
+function DeviceApprovals({ onPendingChange }) {
+  const [pending, setPending] = useState(null);
+  const [approved, setApproved] = useState(null); // null = loading, false = the API can't list approved phones yet
+  const [msg, setMsg] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const list = await listDeviceRequests();
+      setPending(list);
+      onPendingChange?.(list.length);
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+      setPending([]);
+    }
+    try {
+      setApproved(await listApprovedDevices());
+    } catch {
+      setApproved(false);
+    }
+  }, [onPendingChange]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function decide(r, decision) {
+    let note = "";
+    if (decision === "rejected") {
+      note = window.prompt(`Reason for not approving ${r.staffName}'s phone (optional)`);
+      if (note === null) return; // cancelled
+    }
+    setBusyId(r.requestId);
+    setMsg(null);
+    try {
+      await decideDeviceRequest(r.requestId, { decision, note: note.trim() });
+      setMsg({
+        ok: true,
+        text: `${r.staffName}'s phone ${decision === "approved" ? "approved. They can now clock in." : "not approved."}`,
+      });
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function revoke(d) {
+    if (
+      !window.confirm(
+        `Revoke ${d.staffName}'s phone "${d.label}"? They won't be able to clock in until they register a new phone and you approve it.`
+      )
+    )
+      return;
+    setBusyId(d.requestId);
+    setMsg(null);
+    try {
+      await revokeDevice(d.userId, d.credentialId);
+      setMsg({ ok: true, text: `${d.staffName}'s phone was revoked.` });
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const rows = [...(pending || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+
+  return (
+    <>
+      <Banner msg={msg} />
+
+      <section className={`${CARD} mb-6`}>
+        <div className="flex items-center gap-2">
+          <h3 className="font-medium">Phones waiting for approval</h3>
+          {rows.length > 0 && <Chip text={String(rows.length)} cls="bg-[#FFF4E5] text-[#8A4B00]" />}
+        </div>
+        <p className="mt-1 text-sm text-[#667085]">
+          Staff register their own phone, and it can only be used for clocking in once you approve it. Check that the
+          person asking is the owner of the phone.
+        </p>
+        {!pending ? (
+          <p className="mt-3 text-sm text-[#667085]">Loading...</p>
+        ) : rows.length === 0 ? (
+          <p className="mt-3 text-sm text-[#667085]">No phones are waiting.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[560px] border-collapse text-sm">
+              <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+                <tr>
+                  <th className={TH}>Staff member</th>
+                  <th className={TH}>Phone</th>
+                  <th className={TH}>Registered</th>
+                  <th className={TH} />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.requestId} className="border-b border-[#EEF1F0] last:border-0">
+                    <td className="px-3 py-2.5">
+                      <span className="font-medium">{r.staffName}</span>
+                      {r.staffEmail && <span className="block text-xs text-[#667085]">{r.staffEmail}</span>}
+                    </td>
+                    <td className="px-3 py-2.5">{r.label}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">{when(r.createdAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                      <button
+                        className={`${BTN_PRIMARY} px-3 py-1.5`}
+                        disabled={busyId === r.requestId}
+                        onClick={() => decide(r, "approved")}
+                      >
+                        Approve
+                      </button>{" "}
+                      <button
+                        className={`${BTN} px-3 py-1.5`}
+                        disabled={busyId === r.requestId}
+                        onClick={() => decide(r, "rejected")}
+                      >
+                        Decline
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className={CARD}>
+        <h3 className="font-medium">Approved phones</h3>
+        {approved === null ? (
+          <p className="mt-3 text-sm text-[#667085]">Loading...</p>
+        ) : approved === false ? (
+          <p className="mt-3 text-sm text-[#667085]">
+            The list of approved phones isn&apos;t available yet. It needs the devices endpoint on the attendance API.
+          </p>
+        ) : approved.length === 0 ? (
+          <p className="mt-3 text-sm text-[#667085]">No phones have been approved yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[560px] border-collapse text-sm">
+              <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+                <tr>
+                  <th className={TH}>Staff member</th>
+                  <th className={TH}>Phone</th>
+                  <th className={TH}>Approved</th>
+                  <th className={TH} />
+                </tr>
+              </thead>
+              <tbody>
+                {[...approved]
+                  .sort((a, b) => String(a.staffName).localeCompare(String(b.staffName)))
+                  .map((d) => (
+                    <tr key={d.requestId} className="border-b border-[#EEF1F0] last:border-0">
+                      <td className="px-3 py-2.5">
+                        <span className="font-medium">{d.staffName}</span>
+                        {d.staffEmail && <span className="block text-xs text-[#667085]">{d.staffEmail}</span>}
+                      </td>
+                      <td className="px-3 py-2.5">{d.label}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{when(d.decidedAt || d.createdAt)}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <button
+                          className={`${BTN} px-3 py-1.5`}
+                          disabled={busyId === d.requestId}
+                          onClick={() => revoke(d)}
+                        >
+                          Revoke
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </>
   );
 }
@@ -1455,6 +1648,7 @@ function LeavePanel({ canApprove }) {
 export default function Attendance() {
   const [tab, setTab] = useState("mine");
   const [access, setAccess] = useState({ isAdmin: false });
+  const [pendingPhones, setPendingPhones] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -1465,6 +1659,14 @@ export default function Attendance() {
       mounted = false;
     };
   }, []);
+
+  // Show how many phones are waiting for approval on the Phones tab
+  useEffect(() => {
+    if (!access.isAdmin) return;
+    listDeviceRequests()
+      .then((list) => setPendingPhones(list.length))
+      .catch(() => {});
+  }, [access.isAdmin]);
 
   // Administrators and the CEO approve leave. If getAccess() returns canApproveLeave, that wins.
   const canApprove = access.canApproveLeave ?? !!access.isAdmin;
@@ -1498,6 +1700,7 @@ export default function Attendance() {
         {tabBtn("mine", "My attendance")}
         {tabBtn("leave", "Leave")}
         {access.isAdmin && tabBtn("team", "Team")}
+        {access.isAdmin && tabBtn("devices", pendingPhones ? `Phones (${pendingPhones})` : "Phones")}
         {access.isAdmin && tabBtn("scanner", "Scanner")}
       </div>
 
@@ -1505,6 +1708,8 @@ export default function Attendance() {
         <LeavePanel canApprove={canApprove} />
       ) : access.isAdmin && tab === "team" ? (
         <TeamAttendance onOpenScanner={() => setTab("scanner")} />
+      ) : access.isAdmin && tab === "devices" ? (
+        <DeviceApprovals onPendingChange={setPendingPhones} />
       ) : access.isAdmin && tab === "scanner" ? (
         <ScannerSetup />
       ) : (
