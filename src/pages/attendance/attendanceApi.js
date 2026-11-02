@@ -7,19 +7,25 @@ const BASE = (
   "https://8w80mrmztc.execute-api.eu-north-1.amazonaws.com"
 ).replace(/\/+$/, "");
 
-// IMPORTANT: this must read the same place your login code saves the token
-// (the same key workplanApi.js uses). If you see 401 on every request, open
-// DevTools > Application > Local Storage, find the key that holds the JWT,
-// and put its name first in this list.
-const TOKEN_KEYS = ["token", "authToken", "accessToken", "idToken", "jwt"];
+// The login page (Login.jsx) saves the Cognito session as JSON under
+// "eachrights_auth": in localStorage when "Remember me" is ticked, otherwise
+// in sessionStorage. It looks like { idToken, accessToken, refreshToken, email }.
+const AUTH_KEY = "eachrights_auth";
+
+// Which token the API expects. A Cognito JWT authorizer normally wants the
+// ID token. If you still get 401 with a fresh sign-in, change this to "accessToken".
+const TOKEN_FIELD = "idToken";
 
 const getToken = () => {
-  for (const store of [localStorage, sessionStorage]) {
-    for (const key of TOKEN_KEYS) {
-      const value = store.getItem(key);
-      if (value && value !== "null" && value !== "undefined") {
-        return value.replace(/^Bearer\s+/i, "");
-      }
+  for (const store of [sessionStorage, localStorage]) {
+    try {
+      const raw = store.getItem(AUTH_KEY);
+      if (!raw) continue;
+      const session = JSON.parse(raw);
+      const token = session?.[TOKEN_FIELD] || session?.accessToken;
+      if (token) return token;
+    } catch {
+      /* ignore a corrupted entry and try the next store */
     }
   }
   return null;
@@ -112,27 +118,19 @@ export const getStatus = () =>
 
 /* ---------- Administrator phone approvals ---------- */
 
-// Fetches every device request (pending, approved, rejected, revoked)
-// and always returns a plain array, whether the API sends [..] or { items: [..] }.
-async function fetchDeviceRequests() {
-  const result = await call("/me/attendance/device-requests");
-  return Array.isArray(result) ? result : result?.items || [];
-}
+const itemsOf = (result) => (Array.isArray(result) ? result : result?.items || []);
 
-// Pending requests only, as an array.
-// If your backend uses a different status name (e.g. "pending_approval"),
-// change the check below to match.
+// Phones waiting for approval (the backend returns only pending requests here).
 export async function listDeviceRequests() {
-  const items = await fetchDeviceRequests();
-  return items.filter((r) => !r.status || r.status === "pending");
+  return itemsOf(await call("/me/attendance/device-requests"));
 }
 
-// Approved phones, taken from the same device-requests list.
-// Resolves to [] when there are none. If the request fails it throws,
-// and the Phones tab then shows its "isn't available yet" message.
+// Approved phones that are still in use (administrator).
+// Each item has requestId, userId, credentialId, staffName, staffEmail, label,
+// createdAt and decidedAt. If the request fails it throws, and the Phones tab
+// then shows its "isn't available yet" message.
 export async function listApprovedDevices() {
-  const items = await fetchDeviceRequests();
-  return items.filter((r) => r.status === "approved");
+  return itemsOf(await call("/me/attendance/devices"));
 }
 
 // decision must be "approved" or "rejected".
