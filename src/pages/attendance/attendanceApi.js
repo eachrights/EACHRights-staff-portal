@@ -2,8 +2,8 @@
 // The fingerprint is verified locally by the device. The API verifies the
 // signed WebAuthn proof; the browser never receives fingerprint data.
 //
-// Direct prompt: staff open the portal on their own phone, and the phone shows
-// its fingerprint prompt straight away. There is no QR code step.
+// On a phone the fingerprint prompt shows straight away. On a PC the browser
+// uses a linked phone (Chrome remembers it after the first QR scan).
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
@@ -352,12 +352,6 @@ export async function registerDevice(label) {
     );
   }
 
-  if (!(await platformAvailable())) {
-    throw new Error(
-      "This device has no fingerprint, face or screen-lock sign-in. Open this page on your phone and try again."
-    );
-  }
-
   const options = await call(
     "/me/attendance/register/options",
     {
@@ -380,9 +374,8 @@ export async function registerDevice(label) {
         { type: "public-key", alg: -257 }, // RS256
       ],
       authenticatorSelection: {
-        // "platform" = this device's own authenticator, so the fingerprint
-        // prompt shows straight away instead of a QR code.
-        authenticatorAttachment: "platform",
+        // No authenticatorAttachment: on a phone the fingerprint prompt shows
+        // straight away; on a PC the browser offers "Use a phone or tablet".
         userVerification: "required",
         residentKey: "discouraged",
       },
@@ -463,8 +456,10 @@ export async function punch(type) {
       allowCredentials: options.allowCredentials.map((id) => ({
         type: "public-key",
         id: dec(id),
-        // "internal" = this device's own fingerprint. No QR code.
-        transports: ["internal"],
+        // "internal" = this device's own fingerprint (phone: prompt straight away).
+        // "hybrid" = use a phone from a PC. Chrome offers a phone it has already
+        // linked (no scanning), otherwise it shows the QR code once.
+        transports: ["internal", "hybrid"],
       })),
       userVerification: "required",
       timeout: 120000,
