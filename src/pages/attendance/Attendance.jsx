@@ -5,7 +5,6 @@ import { WEEKEND_DAYS, holidayName } from "../../holidays";
 import { listAway } from "../travel/travelApi";
 import {
   fingerprintSupported,
-  platformAvailable,
   getStatus,
   registerDevice,
   punch,
@@ -197,7 +196,8 @@ function useNow() {
 
 function friendly(e) {
   if (e.code === "NOT_IN_OFFICE") return "You can only clock in or out from the office Wi-Fi.";
-  if (e.name === "NotAllowedError") return "The fingerprint check was cancelled or timed out. Please try again.";
+  if (e.name === "NotAllowedError")
+    return "The fingerprint check was cancelled or timed out. Please try again, and if you are using your phone, keep Bluetooth on for both your computer and your phone.";
   if (e.name === "InvalidStateError") return "This device is already set up.";
   if (e.name === "SecurityError") return "Fingerprint sign-in is not available on this web address.";
   return e.message || "Something went wrong.";
@@ -353,15 +353,15 @@ function EnrolForm({ onEnrol, busy, compact }) {
       className={`flex flex-wrap items-center gap-2 ${compact ? "" : "mt-4"}`}
       onSubmit={(e) => {
         e.preventDefault();
-        onEnrol(label.trim() || "This device");
+        onEnrol(label.trim() || "My phone");
       }}
     >
       <input
         className={`${INPUT} w-56`}
-        placeholder="Device name, e.g. My laptop"
+        placeholder="Phone name, e.g. My Samsung"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        aria-label="Device name"
+        aria-label="Phone name"
       />
       <button className={BTN_PRIMARY} disabled={busy}>
         <Fingerprint size={16} /> {busy ? "Waiting for fingerprint..." : "Set up fingerprint"}
@@ -408,7 +408,6 @@ function MyAttendance() {
   const [range, setRange] = useState("week");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [platform, setPlatform] = useState(true);
   const now = useNow();
 
   const loadStatus = useCallback(
@@ -428,7 +427,6 @@ function MyAttendance() {
 
   useEffect(() => {
     loadStatus();
-    platformAvailable().then(setPlatform);
   }, [loadStatus]);
   useEffect(() => {
     loadRecords();
@@ -459,7 +457,8 @@ function MyAttendance() {
 
   const webEnabled = !!status?.webPunchEnabled;
   const atOffice = status?.onOfficeNetwork !== false; // undefined = backend not updated yet
-  const supported = fingerprintSupported() && platform;
+  // A PC without a fingerprint reader is fine: it can use a phone through a QR code.
+  const supported = fingerprintSupported();
   const rows = useMemo(() => mineRows(records, range, leaves), [records, range, leaves]);
   const todayOff = dayOff(dayKey(now.toISOString()), leaves);
   const todayPunches = useMemo(() => withDirection(status?.today || []), [status]);
@@ -548,8 +547,8 @@ function MyAttendance() {
             </div>
           ) : !supported ? (
             <p className="rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
-              This browser or device can&apos;t check fingerprints. Use a recent Chrome, Edge or Safari on a phone or
-              laptop with a fingerprint reader, and open the portal over HTTPS.
+              This browser can&apos;t use fingerprint sign-in. Use a recent Chrome, Edge or Safari, and open the portal
+              over HTTPS.
             </p>
           ) : !status.enrolled && status.pendingDevice ? (
             <div>
@@ -564,8 +563,10 @@ function MyAttendance() {
             <>
               <h3 className="text-lg font-medium">Set up your fingerprint</h3>
               <p className="mt-1 text-sm text-[#667085]">
-                Your phone or laptop checks your fingerprint itself. The portal never sees or stores it. An
-                administrator approves your phone once, and only one phone can be approved for each person.
+                Your phone checks your fingerprint itself. The portal never sees or stores it. On a computer, a QR
+                code will appear: choose &ldquo;Use a phone or tablet&rdquo; if asked, scan the code with your phone
+                camera and touch the fingerprint sensor when your phone asks. Keep Bluetooth on for both devices.
+                An administrator approves your phone once, and only one phone can be approved for each person.
               </p>
               <EnrolForm onEnrol={onEnrol} busy={busy} />
             </>
@@ -579,7 +580,7 @@ function MyAttendance() {
                 }`}
               >
                 <Fingerprint size={34} />
-                <span className="text-sm font-medium">{busy ? "Touch sensor" : clockedIn ? "Clock out" : "Clock in"}</span>
+                <span className="text-sm font-medium">{busy ? "Use your phone" : clockedIn ? "Clock out" : "Clock in"}</span>
               </button>
               <div>
                 <p className="text-3xl font-semibold tabular-nums">
@@ -594,7 +595,10 @@ function MyAttendance() {
                     <span className="text-[#475467]">Not clocked in.</span>
                   )}
                 </p>
-                <p className="mt-0.5 text-xs text-[#667085]">Touch your fingerprint sensor when your device asks.</p>
+                <p className="mt-0.5 text-xs text-[#667085]">
+                  On a computer, scan the QR code with your phone, then touch your fingerprint sensor when your phone
+                  asks.
+                </p>
                 {!atOffice && (
                   <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
                     Connect to the office Wi-Fi to clock in or out.

@@ -1,6 +1,9 @@
 // API and fingerprint (WebAuthn) helpers for EACHRights staff attendance.
 // The fingerprint is verified locally by the device. The API verifies the
 // signed WebAuthn proof; the browser never receives fingerprint data.
+//
+// Direct prompt: staff open the portal on their own phone, and the phone shows
+// its fingerprint prompt straight away. There is no QR code step.
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
@@ -100,6 +103,8 @@ export const fingerprintSupported = () =>
   window.isSecureContext &&
   !!window.PublicKeyCredential;
 
+// Whether THIS device has its own fingerprint/face/PIN authenticator.
+// Registering and clocking in now need this, so staff must use their phone.
 export const platformAvailable = async () => {
   try {
     if (!fingerprintSupported()) return false;
@@ -110,6 +115,28 @@ export const platformAvailable = async () => {
     return false;
   }
 };
+
+/* ---------- WebAuthn error help ---------- */
+
+// If the browser blocks the fingerprint prompt with a SecurityError, say which
+// web address the page is on and which RP ID the server sent. They must match
+// (the page host must equal the RP ID or be a sub-domain of it).
+async function withRpHint(rpId, run) {
+  try {
+    return await run();
+  } catch (err) {
+    if (err?.name === "SecurityError") {
+      const host = window.location.hostname;
+      const match = host === rpId || host.endsWith(`.${rpId}`);
+      throw new Error(
+        match
+          ? `Fingerprint sign-in was blocked on "${host}". Open the portal directly in Chrome or Safari (not inside WhatsApp, email or another app) over https.`
+          : `Fingerprint sign-in was blocked. This page is "${host}" but the server's RP ID is "${rpId}". They must match. Ask the administrator to fix WEBAUTHN_RP_ID, then register your phone again.`
+      );
+    }
+    throw err;
+  }
+}
 
 /* ---------- Attendance status ---------- */
 
@@ -315,7 +342,8 @@ export async function importPunches(punches = []) {
 
 /* ---------- WebAuthn device registration ---------- */
 
-// Registers the current device.
+// Registers the device you are on (the phone's own fingerprint/face/PIN).
+// The fingerprint prompt appears directly; there is no QR code.
 // New registrations must remain pending until an administrator approves.
 export async function registerDevice(label) {
   if (!fingerprintSupported()) {
@@ -324,11 +352,9 @@ export async function registerDevice(label) {
     );
   }
 
-  const available = await platformAvailable();
-
-  if (!available) {
+  if (!(await platformAvailable())) {
     throw new Error(
-      "This device does not have an available platform authenticator. Check its fingerprint, face recognition or device security settings."
+      "This device has no fingerprint, face or screen-lock sign-in. Open this page on your phone and try again."
     );
   }
 
@@ -340,7 +366,7 @@ export async function registerDevice(label) {
     }
   );
 
-  const credential = await navigator.credentials.create({
+  const credential = await withRpHint(options.rp?.id, () => navigator.credentials.create({
     publicKey: {
       challenge: dec(options.challenge),
       rp: options.rp,
@@ -354,6 +380,8 @@ export async function registerDevice(label) {
         { type: "public-key", alg: -257 }, // RS256
       ],
       authenticatorSelection: {
+        // "platform" = this device's own authenticator, so the fingerprint
+        // prompt shows straight away instead of a QR code.
         authenticatorAttachment: "platform",
         userVerification: "required",
         residentKey: "discouraged",
@@ -365,9 +393,9 @@ export async function registerDevice(label) {
         })
       ),
       attestation: "none",
-      timeout: 60000,
+      timeout: 120000,
     },
-  });
+  }));
 
   if (!credential) {
     throw new Error("Device registration was cancelled.");
@@ -424,22 +452,24 @@ export async function punch(type) {
 
   if (!options.allowCredentials?.length) {
     throw new Error(
-      "No approved phone is registered for this account. Register your device and wait for administrator approval."
+      "No approved phone is registered for this account. Register your phone and wait for administrator approval."
     );
   }
 
-  const credential = await navigator.credentials.get({
+  const credential = await withRpHint(options.rpId, () => navigator.credentials.get({
     publicKey: {
       challenge: dec(options.challenge),
       rpId: options.rpId,
       allowCredentials: options.allowCredentials.map((id) => ({
         type: "public-key",
         id: dec(id),
+        // "internal" = this device's own fingerprint. No QR code.
+        transports: ["internal"],
       })),
       userVerification: "required",
-      timeout: 60000,
+      timeout: 120000,
     },
-  });
+  }));
 
   if (!credential) {
     throw new Error("Attendance verification was cancelled.");
