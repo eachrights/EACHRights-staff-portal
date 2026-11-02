@@ -30,6 +30,9 @@ const TZ = "Africa/Nairobi";
 const DAY_MS = 86400000;
 const DOUBLE_TAP_MS = 60000; // a second press within a minute counts once
 
+// True when the portal is open in a phone's own browser
+const onPhone = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 const timeOf = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
 const dayKey = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: TZ });
@@ -197,7 +200,9 @@ function useNow() {
 function friendly(e) {
   if (e.code === "NOT_IN_OFFICE") return "You can only clock in or out from the office Wi-Fi.";
   if (e.name === "NotAllowedError")
-    return "The fingerprint check was cancelled or timed out. Please try again, and if you are using your phone, keep Bluetooth on for both your computer and your phone.";
+    return onPhone
+      ? "The fingerprint check was cancelled or timed out. Please try again and touch the fingerprint sensor when your phone asks."
+      : "The fingerprint check was cancelled or timed out. For the easiest way, open this page on your phone and clock in there. On a computer, your phone must be close by with Bluetooth on for both devices.";
   if (e.name === "InvalidStateError") return "This device is already set up.";
   if (e.name === "SecurityError") return "Fingerprint sign-in is not available on this web address.";
   return e.message || "Something went wrong.";
@@ -563,9 +568,11 @@ function MyAttendance() {
             <>
               <h3 className="text-lg font-medium">Set up your fingerprint</h3>
               <p className="mt-1 text-sm text-[#667085]">
-                Your phone checks your fingerprint itself. The portal never sees or stores it. On a computer, a QR
-                code will appear: choose &ldquo;Use a phone or tablet&rdquo; if asked, scan the code with your phone
-                camera and touch the fingerprint sensor when your phone asks. Keep Bluetooth on for both devices.
+                Your phone checks your fingerprint itself. The portal never sees or stores it. For the quickest setup,
+                open this page in your phone&apos;s browser (Chrome or Safari) and touch the fingerprint sensor when
+                asked.
+                {!onPhone &&
+                  " On a computer, choose “Use a phone or tablet”, scan the QR code with your phone and keep Bluetooth on for both devices."}{" "}
                 An administrator approves your phone once, and only one phone can be approved for each person.
               </p>
               <EnrolForm onEnrol={onEnrol} busy={busy} />
@@ -580,7 +587,9 @@ function MyAttendance() {
                 }`}
               >
                 <Fingerprint size={34} />
-                <span className="text-sm font-medium">{busy ? "Use your phone" : clockedIn ? "Clock out" : "Clock in"}</span>
+                <span className="text-sm font-medium">
+                  {busy ? (onPhone ? "Touch sensor" : "Use your phone") : clockedIn ? "Clock out" : "Clock in"}
+                </span>
               </button>
               <div>
                 <p className="text-3xl font-semibold tabular-nums">
@@ -596,8 +605,9 @@ function MyAttendance() {
                   )}
                 </p>
                 <p className="mt-0.5 text-xs text-[#667085]">
-                  On a computer, scan the QR code with your phone, then touch your fingerprint sensor when your phone
-                  asks.
+                  {onPhone
+                    ? "Tap the button and touch your fingerprint sensor."
+                    : "Tip: clock in from your phone's browser for a one-tap fingerprint check. On a computer you need your phone nearby with Bluetooth on."}
                 </p>
                 {!atOffice && (
                   <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
