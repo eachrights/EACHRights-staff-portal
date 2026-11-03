@@ -26,6 +26,10 @@ import { fingerprintSupported, getStatus, punch, listLeave, setWorkingFromHome }
 
 const ALLOW_SKIP_AFTER_FAILURE = true;
 
+// Prints why the screen did or did not appear in the browser console (F12). Set to false when done.
+const DEBUG = true;
+const why = (msg, extra) => DEBUG && console.log("[AttendanceGate]", msg, extra ?? "");
+
 const TZ = "Africa/Nairobi";
 const SKIP_KEY = "attendance_gate_skip";
 
@@ -66,29 +70,34 @@ export default function AttendanceGate() {
     async function check() {
       const today = dayKey();
 
-      if (skippedThisSession()) return;
-      if (WEEKEND_DAYS.includes(weekday(today)) || holidayName(today)) return;
-      if (!fingerprintSupported()) return;
+      why("started");
+      if (skippedThisSession()) return why("not shown: skipped for this session");
+      if (WEEKEND_DAYS.includes(weekday(today)) || holidayName(today)) return why("not shown: weekend or public holiday", today);
+      if (!fingerprintSupported()) return why("not shown: browser has no WebAuthn (needs HTTPS or localhost)");
 
       let status;
       try {
         status = await getStatus();
-      } catch {
+      } catch (e) {
+        why("not shown: could not load attendance status", e?.message);
         return; // never lock people out of the portal because of an attendance problem
       }
 
-      if (!status?.webPunchEnabled || !status.enrolled) return;
-      if (status.onOfficeNetwork === false) return; // not at the office: nothing to clock in to
-      if (status.workingFromHome) return; // already chose working from home today
-      if ((status.today || []).some((r) => r.type === "in" || r.type === "out")) return; // already clocked today
+      why("status", status);
+      if (!status?.webPunchEnabled) return why("not shown: phone/laptop clocking is switched off on the server");
+      if (!status.enrolled) return why("not shown: no approved phone for this person");
+      if (status.onOfficeNetwork === false) return why("not shown: not on the office network"); // not at the office
+      if (status.workingFromHome) return why("not shown: already chose working from home today");
+      if ((status.today || []).some((r) => r.type === "in" || r.type === "out")) return why("not shown: already clocked in today");
 
       // Skip people on approved leave or official travel today.
       const [leave, trips] = await Promise.all([
         listLeave({ scope: "me", from: today, to: today }).catch(() => []),
         listAway({ scope: "me", from: today, to: today }).catch(() => []),
       ]);
-      if ([...leave, ...trips].some((l) => l.from <= today && today <= l.to)) return;
+      if ([...leave, ...trips].some((l) => l.from <= today && today <= l.to)) return why("not shown: on leave or official travel today");
 
+      why("SHOWING the clock-in screen");
       if (on) setOpen(true);
     }
 
