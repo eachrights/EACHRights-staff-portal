@@ -41,14 +41,25 @@ const getToken = () => {
 async function call(path, options = {}) {
   const token = getToken();
 
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  const url = `${BASE}${path}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err) {
+    // The browser gives no detail when a request is blocked, so say where it tried to go.
+    const here = typeof window !== "undefined" ? window.location.origin : "";
+    console.error("Workplan request failed", { url, from: here, err });
+    throw new Error(
+      `Could not reach the API at ${url} from ${here}. Either that address is wrong (check VITE_API_URL in .env and restart npm run dev) or the API does not allow this web address (CORS).`
+    );
+  }
 
   if (res.status === 204) return null;
 
