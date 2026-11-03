@@ -369,6 +369,7 @@ export async function registerDevice(label) {
   }
 
   const deviceId = getDeviceId();
+  console.log("REGISTER v2, deviceId =", deviceId);
 
   const options = await call(
     "/me/attendance/register/options",
