@@ -2,9 +2,9 @@
 // The fingerprint is verified locally by the device. The API verifies the
 // signed WebAuthn proof; the browser never receives fingerprint data.
 //
-// Cross-device: staff can sign in on a PC and use their phone as the
-// authenticator. The browser shows a QR code, the phone scans it and asks for
-// the fingerprint, and the signed proof returns to the PC (WebAuthn "hybrid").
+// Registration happens on the phone itself (platform authenticator) and sends a
+// per-phone device ID, so the server can enforce "one phone, one account".
+// Clocking in can still use a phone through a QR code on a PC (WebAuthn "hybrid").
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
@@ -96,18 +96,38 @@ const dec = (value) => {
   ).buffer;
 };
 
+/* ---------- Device ID (one phone, one account) ---------- */
+
+const DEVICE_ID_KEY = "eachrights_device_id";
+
+// A random ID stored on this phone's browser. The server uses it to make sure
+// one phone is linked to only one staff account.
+export const getDeviceId = () => {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    throw new Error(
+      "This browser blocks storage, so the phone cannot be identified. Turn off private browsing and try again."
+    );
+  }
+};
+
 /* ---------- WebAuthn capability checks ---------- */
 
 // WebAuthn requires HTTPS or localhost and a supported browser.
-// A PC without a fingerprint reader is fine: it can use a phone through the QR code.
+// A PC without a fingerprint reader is fine for clocking in: it can use a phone through the QR code.
 export const fingerprintSupported = () =>
   typeof window !== "undefined" &&
   window.isSecureContext &&
   !!window.PublicKeyCredential;
 
 // Whether THIS device has its own fingerprint/face/PIN authenticator.
-// No longer required for registering or clocking in (a phone can be used
-// instead), but kept for anything that still wants to know.
+// Registration now requires it (register on the phone itself).
 export const platformAvailable = async () => {
   try {
     if (!fingerprintSupported()) return false;
@@ -135,8 +155,8 @@ export async function listDeviceRequests() {
 
 // Approved phones that are still in use (administrator).
 // Each item has requestId, userId, credentialId, staffName, staffEmail, label,
-// createdAt and decidedAt. If the request fails it throws, and the Phones tab
-// then shows its "isn't available yet" message.
+// createdAt, decidedAt and deviceRef (short phone reference). If the request
+// fails it throws, and the Phones tab then shows its "isn't available yet" message.
 export async function listApprovedDevices() {
   return itemsOf(await call("/me/attendance/devices"));
 }
@@ -338,9 +358,9 @@ export async function importPunches(punches = []) {
 
 /* ---------- WebAuthn device registration ---------- */
 
-// Registers a device. This can be the PC's own authenticator, or a phone used
-// through the QR code ("Use a phone or tablet").
-// New registrations must remain pending until an administrator approves.
+// Registers THIS phone using its own fingerprint/face/PIN. The phone's device ID
+// is sent so the server can refuse a phone that is already linked to another account.
+// New registrations remain pending until an administrator approves.
 export async function registerDevice(label) {
   if (!fingerprintSupported()) {
     throw new Error(
@@ -348,11 +368,13 @@ export async function registerDevice(label) {
     );
   }
 
+  const deviceId = getDeviceId();
+
   const options = await call(
     "/me/attendance/register/options",
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ deviceId }),
     }
   );
 
@@ -370,13 +392,12 @@ export async function registerDevice(label) {
         { type: "public-key", alg: -257 }, // RS256
       ],
       authenticatorSelection: {
-        // No authenticatorAttachment here: that lets the browser offer
-        // "Use a phone or tablet" (QR code) as well as the device itself.
+        // This device only: no QR code / "use another phone" flow, so the
+        // credential is created on the same phone that holds the device ID.
+        authenticatorAttachment: "platform",
         userVerification: "required",
         residentKey: "discouraged",
       },
-      // Chrome 128+: lead with the phone/QR option. Ignored by other browsers.
-      hints: ["hybrid"],
       excludeCredentials: (options.excludeCredentials || []).map(
         (id) => ({
           type: "public-key",
@@ -406,6 +427,7 @@ export async function registerDevice(label) {
   return call("/me/attendance/register", {
     method: "POST",
     body: JSON.stringify({
+      deviceId,
       credential: {
         id: credential.id,
         clientDataJSON: enc(response.clientDataJSON),
