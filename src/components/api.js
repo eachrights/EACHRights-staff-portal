@@ -1,4 +1,3 @@
-
 import { userPool } from "../cognito";
 
 export const API_BASE_URL = (
@@ -6,10 +5,25 @@ export const API_BASE_URL = (
   "https://8w80mrmztc.execute-api.eu-north-1.amazonaws.com"
 ).replace(/\/+$/, "");
 
+// Debug logging only while developing (npm run dev). Responses can contain staff data.
+const DEBUG = Boolean(import.meta.env.DEV);
+
 export class SessionError extends Error {
   constructor(message = "Your session has expired. Please sign in again.") {
     super(message);
     this.name = "SessionError";
+    this.code = "UNAUTHORIZED";
+  }
+}
+
+/* Error thrown for any non-OK API response. Keeps the server's code and HTTP status,
+   so callers can react to codes such as DEVICE_ALREADY_USED or NOT_IN_OFFICE. */
+export class ApiError extends Error {
+  constructor(message, { status, code } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -41,10 +55,12 @@ export async function apiRequest(path, { method = "GET", body } = {}) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const url = `${API_BASE_URL}${normalizedPath}`;
 
-  console.log("========== EACHRights API DEBUG ==========");
-  console.log("API BASE URL:", API_BASE_URL);
-  console.log("API REQUEST URL:", url);
-  console.log("API METHOD:", method);
+  if (DEBUG) {
+    console.log("========== EACHRights API DEBUG ==========");
+    console.log("API BASE URL:", API_BASE_URL);
+    console.log("API REQUEST URL:", url);
+    console.log("API METHOD:", method);
+  }
 
   let response;
 
@@ -59,26 +75,33 @@ export async function apiRequest(path, { method = "GET", body } = {}) {
     });
   } catch (error) {
     console.error("API NETWORK ERROR:", error);
-    throw new Error(
-      "Cannot connect to the API. Check your internet connection and API Gateway URL."
+    throw new ApiError(
+      "Cannot connect to the API. Check your internet connection and API Gateway URL.",
+      { code: "NETWORK" }
     );
   }
+
+  // No content (for example some DELETE responses).
+  if (response.status === 204) return null;
 
   const contentType = response.headers.get("content-type") || "";
   const responseText = await response.text();
 
-  console.log("API STATUS:", response.status);
-  console.log("API CONTENT TYPE:", contentType);
-  console.log("API RESPONSE:", responseText.slice(0, 1000));
-  console.log("==========================================");
+  if (DEBUG) {
+    console.log("API STATUS:", response.status);
+    console.log("API CONTENT TYPE:", contentType);
+    console.log("API RESPONSE:", responseText.slice(0, 1000));
+    console.log("==========================================");
+  }
 
   if (response.status === 401) {
     throw new SessionError();
   }
 
   if (!contentType.toLowerCase().includes("application/json")) {
-    throw new Error(
-      `The API returned ${contentType || "an unknown content type"} instead of JSON. HTTP ${response.status}. Check API Gateway routing and the API URL.`
+    throw new ApiError(
+      `The API returned ${contentType || "an unknown content type"} instead of JSON. HTTP ${response.status}. Check API Gateway routing and the API URL.`,
+      { status: response.status, code: "NOT_JSON" }
     );
   }
 
@@ -87,14 +110,18 @@ export async function apiRequest(path, { method = "GET", body } = {}) {
   try {
     data = responseText ? JSON.parse(responseText) : {};
   } catch {
-    throw new Error("The API returned invalid JSON.");
+    throw new ApiError("The API returned invalid JSON.", {
+      status: response.status,
+      code: "BAD_JSON",
+    });
   }
 
   if (!response.ok) {
-    throw new Error(
+    throw new ApiError(
       data?.message ||
-      data?.error ||
-      `API request failed with status ${response.status}`
+        data?.error ||
+        `API request failed with status ${response.status}`,
+      { status: response.status, code: data?.code }
     );
   }
 
