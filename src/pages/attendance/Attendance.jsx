@@ -3,6 +3,7 @@ import { Fingerprint, Download, Trash2, Printer } from "lucide-react";
 import { getAccess } from "../../access";
 import { WEEKEND_DAYS, holidayName } from "../../holidays";
 import { listAway } from "../travel/travelApi";
+import YearlyReport from "./YearlyReport";
 import {
   fingerprintSupported,
   getStatus,
@@ -685,7 +686,7 @@ function MyAttendance() {
 
 /* ---------- team (administrator) ---------- */
 
-function TeamAttendance({ onOpenScanner }) {
+function TeamDaily({ onOpenScanner }) {
   const [range, setRange] = useState("week");
   const [q, setQ] = useState("");
   const [records, setRecords] = useState([]);
@@ -802,6 +803,35 @@ function TeamAttendance({ onOpenScanner }) {
           <SummaryTable rows={rows} showName />
         )}
       </div>
+    </>
+  );
+}
+
+function TeamAttendance({ onOpenScanner }) {
+  const [view, setView] = useState("daily");
+  const viewBtn = (key, label) => (
+    <button
+      key={key}
+      onClick={() => setView(key)}
+      aria-pressed={view === key}
+      className={`px-4 py-2 text-sm ${FOCUS} ${
+        view === key ? "bg-[#E3F3EC] font-medium text-[#00664E]" : "bg-white text-[#667085] hover:bg-[#F6F7F8]"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <>
+      <div
+        className="mb-4 inline-flex overflow-hidden rounded-lg border border-[#C9CED6] print:hidden"
+        role="group"
+        aria-label="Team view"
+      >
+        {viewBtn("daily", "Attendance records")}
+        {viewBtn("yearly", "Yearly report")}
+      </div>
+      {view === "yearly" ? <YearlyReport /> : <TeamDaily onOpenScanner={onOpenScanner} />}
     </>
   );
 }

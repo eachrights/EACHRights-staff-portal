@@ -6,6 +6,7 @@ import { LABELS } from "../../../labels";
 import { BTN, BTN_LIGHT, CARD, CardHead, ErrorBar, FIELD, FrameworkSelect, NoFramework, Page, PageHead, useMEData } from "./Shared";
 import PeopleAccess from "./PeopleAccess";
 import LogFrame from "./LogFrame";
+import FundRequests from "./FundRequests";
 import { buildFrameworkFile, downloadJson, fileSlug } from "./frameworkFile";
 
 const AREAS = [...PROGRAM_AREAS, ...DEPARTMENT_AREAS];
@@ -26,6 +27,8 @@ const levelStyle = (i) => LEVEL_STYLE[i % LEVEL_STYLE.length];
 const VIEWS = [
   ["results", "Results and indicators"],
   ["logframe", "Logical framework"],
+  ["milestones", "Milestones"],
+  ["requisitions", "Requisitions"],
 ];
 
 const DANGER =
@@ -125,6 +128,8 @@ const EMPTY_DETAILS = {
   theme: "", focusArea: "", partner: "", region: "",
   startDate: "", endDate: "", budget: "", currency: "", countries: "", description: "",
 };
+
+const EMPTY_MILESTONE = { title: "", dueDate: "", resultId: "" };
 
 const detailsFrom = (fw) => ({
   theme: fw.theme || "",
@@ -227,12 +232,16 @@ function MEFrameworks() {
   const [editingResult, setEditingResult] = useState(null);
   const [resultTitle, setResultTitle] = useState("");
   const [access, setAccess] = useState({ isAdmin: false, departments: new Set() });
-  /* Which view of the selected framework is open: the results list or the logframe table */
+  /* Which view of the selected framework is open: the results list, the logframe table, the milestones or the requisitions */
   const [view, setView] = useState("results");
   /* Results whose rows are open to show the indicators beneath them */
   const [expandedResults, setExpandedResults] = useState(new Set());
   /* Which chip is pressed: a level number, "linked" (has indicators), or null for everything */
   const [resultFilter, setResultFilter] = useState(null);
+  /* Milestones of the selected framework */
+  const [milestones, setMilestones] = useState([]);
+  const [showAddMilestone, setShowAddMilestone] = useState(false);
+  const [mf, setMf] = useState(EMPTY_MILESTONE);
 
   useEffect(() => {
     let mounted = true;
@@ -241,6 +250,20 @@ function MEFrameworks() {
       mounted = false;
     };
   }, []);
+
+  const loadMilestones = async () => {
+    try {
+      const rows = await api(`/me/frameworks/${selectedId}/milestones`);
+      setMilestones(Array.isArray(rows) ? rows : []);
+    } catch {
+      setMilestones([]);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedId) loadMilestones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   /* Programme staff manage frameworks in their own programmes. The administrator manages all of them. */
   const myAreas = isAdmin ? AREAS : AREAS.filter((a) => access.departments.has(a.slug));
@@ -264,6 +287,8 @@ function MEFrameworks() {
     setRf({ title: "", level: 0, parentId: "" });
     setExpandedResults(new Set());
     setResultFilter(null);
+    setShowAddMilestone(false);
+    setMf(EMPTY_MILESTONE);
   };
 
   const toggleResult = (id) =>
@@ -390,6 +415,45 @@ function MEFrameworks() {
     });
   };
 
+  /* ---------- Milestones ---------- */
+
+  const addMilestone = () =>
+    run(async () => {
+      if (!mf.title.trim()) throw new Error("Give the milestone a title.");
+      if (!mf.dueDate) throw new Error("Choose a due date.");
+      if (fw.startDate && mf.dueDate < fw.startDate) throw new Error("The due date is before the framework starts.");
+      if (fw.endDate && mf.dueDate > fw.endDate) throw new Error("The due date is after the framework ends.");
+      await api(`/me/frameworks/${selectedId}/milestones`, {
+        method: "POST",
+        body: {
+          title: mf.title.trim(),
+          dueDate: mf.dueDate,
+          status: "planned",
+          ...(mf.resultId ? { resultId: mf.resultId } : {}),
+        },
+      });
+      setMf(EMPTY_MILESTONE);
+      setShowAddMilestone(false);
+      await loadMilestones();
+    });
+
+  const toggleMilestone = (m) =>
+    run(async () => {
+      await api(`/me/frameworks/${selectedId}/milestones/${m.id}`, {
+        method: "PUT",
+        body: { status: m.status === "done" ? "planned" : "done" },
+      });
+      await loadMilestones();
+    });
+
+  const deleteMilestone = (m) => {
+    if (!window.confirm(`Delete the milestone "${m.title}"? This cannot be undone.`)) return;
+    run(async () => {
+      await api(`/me/frameworks/${selectedId}/milestones/${m.id}`, { method: "DELETE" });
+      await loadMilestones();
+    });
+  };
+
   /* Everything on this page as a file that can be imported back (see the Import page) */
   const exportFramework = () =>
     downloadJson(`${fileSlug(fw.name)}-framework.json`, buildFrameworkFile(fw, ordered, data.indicators));
@@ -405,6 +469,10 @@ function MEFrameworks() {
   const indicatorRows = data
     ? ordered.flatMap((r) => data.indicators.filter((i) => i.resultId === r.id).map((i) => ({ r, i })))
     : [];
+
+  /* Milestones in date order, with today's date to flag the overdue ones */
+  const today = new Date().toISOString().slice(0, 10);
+  const sortedMilestones = [...milestones].sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
 
   const dates = datesOf(fw);
   const themes = fw ? [fw.theme, fw.focusArea].filter(Boolean).join(", ") : "";
@@ -543,6 +611,7 @@ function MEFrameworks() {
                             a={["Partner and region", partnerRegion || "Not set"]}
                             b={["Indicators", data.indicators.length]}
                           />
+                          <DetailRow a={["Milestones", milestones.length]} />
                           {fw.description && (
                             <tr className="border-t border-[#EEF0F4]">
                               <th scope="row" className="bg-[#F9FAFB] px-4 py-2.5 text-left text-xs font-semibold text-[#667085]">Description</th>
@@ -570,7 +639,7 @@ function MEFrameworks() {
                 )}
               </section>
 
-              {/* Switch between the results list and the logframe table */}
+              {/* Switch between the results list, the logframe table, the milestones and the requisitions */}
               <div role="tablist" aria-label="Framework views" className="flex gap-1">
                 {VIEWS.map(([key, label]) => (
                   <button
@@ -600,6 +669,128 @@ function MEFrameworks() {
                   run={run}
                   reload={reload}
                 />
+              )}
+
+              {view === "requisitions" && (
+                <FundRequests key={fw.id ?? selectedId} framework={{ ...fw, id: fw.id ?? selectedId }} />
+              )}
+
+              {view === "milestones" && (
+                <section className={`${CARD} overflow-hidden`} aria-label="Milestones">
+                  <div className="flex items-start justify-between gap-3 p-5 pb-3">
+                    <div className="min-w-0 flex-1">
+                      <CardHead
+                        title="Milestones"
+                        subtitle="Key dates for this framework. Link a milestone to a result if it marks progress on it."
+                      />
+                    </div>
+                    {canManage && (
+                      <button type="button" onClick={() => setShowAddMilestone((s) => !s)} className={BTN}>
+                        {showAddMilestone ? "Close" : "Add milestone"}
+                      </button>
+                    )}
+                  </div>
+
+                  {canManage && showAddMilestone && (
+                    <div className="mx-5 mb-4 rounded-lg border border-[#DDD6F7] bg-[#F8F7FE] p-4" aria-label="Add milestone">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Title" wide>
+                          <input
+                            className={`${FIELD} w-full`}
+                            value={mf.title}
+                            onChange={(e) => setMf({ ...mf, title: e.target.value })}
+                            onKeyDown={(e) => e.key === "Enter" && !busy && addMilestone()}
+                          />
+                        </Field>
+                        <Field label="Due date">
+                          <input
+                            type="date"
+                            className={`${FIELD} w-full`}
+                            min={fw.startDate || undefined}
+                            max={fw.endDate || undefined}
+                            value={mf.dueDate}
+                            onChange={(e) => setMf({ ...mf, dueDate: e.target.value })}
+                          />
+                        </Field>
+                        <Field label="Linked result (optional)">
+                          <select
+                            className={`${FIELD} w-full`}
+                            value={mf.resultId}
+                            onChange={(e) => setMf({ ...mf, resultId: e.target.value })}
+                          >
+                            <option value="">None</option>
+                            {ordered.map((r) => (
+                              <option key={r.id} value={r.id}>{levels[r.level]}: {r.title}</option>
+                            ))}
+                          </select>
+                        </Field>
+                      </div>
+                      <div className="mt-4 flex gap-2">
+                        <button type="button" onClick={addMilestone} disabled={busy} className={BTN}>Add milestone</button>
+                        <button type="button" onClick={() => setShowAddMilestone(false)} className={BTN_LIGHT}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {sortedMilestones.length === 0 ? (
+                    <p className="px-5 pb-8 pt-3 text-center text-sm text-[#98A2B3]">No milestones yet.</p>
+                  ) : (
+                    <div className="max-h-[60vh] overflow-auto">
+                      <table className="w-full min-w-[640px] border-collapse text-sm">
+                        <caption className="sr-only">Milestones of {fw.name}</caption>
+                        <thead>
+                          <tr>
+                            <th scope="col" className={`${TH} pl-5`}>Milestone</th>
+                            <th scope="col" className={TH}>Due</th>
+                            <th scope="col" className={TH}>Linked result</th>
+                            <th scope="col" className={TH}>Status</th>
+                            {canManage && <th scope="col" className={`${TH} pr-5 text-right`}><span className="sr-only">Actions</span></th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedMilestones.map((m) => {
+                            const done = m.status === "done";
+                            const overdue = !done && m.dueDate && m.dueDate < today;
+                            const linked = ordered.find((r) => String(r.id) === String(m.resultId));
+                            return (
+                              <tr key={m.id} className="border-t border-[#F2F4F7] align-middle hover:bg-[#FCFCFD]">
+                                <td className={`${TD} pl-5 font-medium text-[#101828] ${done ? "line-through opacity-60" : ""}`}>{m.title}</td>
+                                <td className={`${TD} whitespace-nowrap text-[#475467]`}>{fmtDay(m.dueDate) || "-"}</td>
+                                <td className={`${TD} text-[#475467]`}>{linked ? linked.title : "-"}</td>
+                                <td className={TD}>
+                                  <span
+                                    className="whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold"
+                                    style={
+                                      done
+                                        ? { background: "#E9F6F1", color: "#00664E" }
+                                        : overdue
+                                        ? { background: "#FEF3F2", color: "#B42318" }
+                                        : { background: "#E8F1FD", color: "#1E4C9A" }
+                                    }
+                                  >
+                                    {done ? "Done" : overdue ? "Overdue" : "Planned"}
+                                  </span>
+                                </td>
+                                {canManage && (
+                                  <td className="whitespace-nowrap py-3 pl-4 pr-5 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button type="button" className={SMALL_GREEN} disabled={busy} onClick={() => toggleMilestone(m)}>
+                                        {done ? "Reopen" : "Mark done"}
+                                      </button>
+                                      <button type="button" className={SMALL_DANGER} disabled={busy} aria-label={`Delete ${m.title}`} onClick={() => deleteMilestone(m)}>
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
               )}
 
               {view === "results" && (

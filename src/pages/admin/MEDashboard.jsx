@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { DEPARTMENT_AREAS, PROGRAM_AREAS, getAccess } from "../../access";
 import { api, downloadCsv } from "../../meApi";
-import PortfolioView from "./PortfolioView";
-
+import PortfolioView from "./me-dashboard/PortfolioView";
 /* Design tokens. White surfaces on a quiet page, purple as the single brand colour,
    green / amber / red reserved for status. */
 const PURPLE = "#5B3FD0";

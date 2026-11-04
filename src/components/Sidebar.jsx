@@ -32,6 +32,7 @@ import {
   Layers,
   Building2,
   Landmark,
+  Wallet,
 } from "lucide-react";
 
 import {
@@ -49,7 +50,7 @@ import { LABELS } from "../labels";
  *
  * Layout, top to bottom:
  *   Home
- *   My workplace          Attendance and leave, Travel
+ *   My workplace          Attendance and leave, Travel, Requisitions
  *   Programmes & results  M&E (collapsible)
  *   Files                 All files, Programmes, Departments, Finance
  *   Administration        (administrator only)
@@ -250,6 +251,7 @@ function Sidebar({ mobileOpen, onClose }) {
   const onMe = pathname.startsWith("/me-dashboard");
   const onAttendance = pathname.startsWith("/attendance");
   const onTravel = pathname.startsWith("/travel");
+  const onRequisitions = pathname.startsWith("/requisitions");
   const onFinance = pathname.startsWith("/admin/finance");
 
   // Groups start closed and open by themselves when you are inside them
@@ -389,6 +391,11 @@ function Sidebar({ mobileOpen, onClose }) {
             <li className="flex">
               <NavItem to="/travel" active={onTravel} onClick={onClose} icon={Plane}>
                 Travel
+              </NavItem>
+            </li>
+            <li className="flex">
+              <NavItem to="/requisitions" active={onRequisitions} onClick={onClose} icon={Wallet}>
+                Requisitions
               </NavItem>
             </li>
           </ul>

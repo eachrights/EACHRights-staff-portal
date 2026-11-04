@@ -48,8 +48,11 @@ import AuditLog from "./pages/admin/me-dashboard/AuditTrail";
 import Attendance from "./pages/attendance/Attendance";
 // Travel and field requests
 import Travel from "./pages/travel/Travel";
-// Approvals and the portfolio roll-up (administrator only). Adjust the path to where the file lives.
-import PortfolioView from "./pages/admin/PortfolioView";
+// Financial requisitions (fund requests raised against a project)
+// Adjust this path if MyRequisitions.jsx is saved in a different folder.
+import MyRequisitions from "./pages/admin/me-dashboard/MyRequisitions";
+// Approvals and the portfolio roll-up (administrator only)
+import PortfolioView from "./pages/admin/me-dashboard/PortfolioView";
 
 // Route protection
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -87,10 +90,11 @@ function App() {
 
         {/* =====================================================
             SHARED SHELL (sidebar and header)
-            Home, Attendance, Travel and M&E sit under ONE layout route, so the
-            sidebar stays mounted while moving between them. Before, each page
-            built its own shell, so the sidebar was torn down and rebuilt on
-            every click (it "popped" in and out and forgot which menus were open).
+            Home, Attendance, Travel, Requisitions and M&E sit under ONE layout
+            route, so the sidebar stays mounted while moving between them.
+            Before, each page built its own shell, so the sidebar was torn down
+            and rebuilt on every click (it "popped" in and out and forgot which
+            menus were open).
             Add new staff pages inside this route.
         ====================================================== */}
         <Route
@@ -108,6 +112,10 @@ function App() {
 
           {/* TRAVEL AND FIELD REQUESTS: staff request trips; administrators and the CEO approve them. */}
           <Route path="/travel" element={<Travel />} />
+
+          {/* FINANCIAL REQUISITIONS: staff raise fund requests against a project.
+              The API decides who can raise, approve and mark requests as paid. */}
+          <Route path="/requisitions" element={<MyRequisitions />} />
 
         {/* =====================================================
             M&E (staff and administrator)
