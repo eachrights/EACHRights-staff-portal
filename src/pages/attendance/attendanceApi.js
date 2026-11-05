@@ -1,23 +1,18 @@
-// API and fingerprint (WebAuthn) helpers for EACHRights staff attendance.
-// The fingerprint is verified locally by the device. The API verifies the
-// signed WebAuthn proof; the browser never receives fingerprint data.
-//
-// Registration happens on the phone itself (platform authenticator) and sends a
-// per-phone device ID, so the server can enforce "one phone, one account".
-// Clocking in can still use a phone through a QR code on a PC (WebAuthn "hybrid").
+// API helpers for EACHRights staff attendance.
+// Matches the attendance route file (IP-allowlist version):
+//   /me/attendance/config, /holidays, /today, /clock, /records, /day, /import
+// Leave uses the /me/leave/... routes from requestRoutes.mjs.
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
   "https://8w80mrmztc.execute-api.eu-north-1.amazonaws.com"
 ).replace(/\/+$/, "");
 
-// The login page (Login.jsx) saves the Cognito session as JSON under
-// "eachrights_auth": in localStorage when "Remember me" is ticked, otherwise
-// in sessionStorage. It looks like { idToken, accessToken, refreshToken, email }.
+// The login page saves the Cognito session as JSON under "eachrights_auth":
+// { idToken, accessToken, refreshToken, email }.
 const AUTH_KEY = "eachrights_auth";
 
-// Which token the API expects. A Cognito JWT authorizer normally wants the
-// ID token. If you still get 401 with a fresh sign-in, change this to "accessToken".
+// Which token the API expects. If you still get 401 after a fresh sign-in, change to "accessToken".
 const TOKEN_FIELD = "idToken";
 
 const getToken = () => {
@@ -60,7 +55,6 @@ async function call(path, options = {}) {
   }
 
   const contentType = res.headers.get("content-type") || "";
-
   if (!contentType.includes("application/json")) {
     throw new Error(
       "The API returned a web page instead of data. Check VITE_API_BASE_URL in .env, then restart npm run dev."
@@ -68,441 +62,161 @@ async function call(path, options = {}) {
   }
 
   const data = await res.json();
-
   if (!res.ok) {
     const err = new Error(data.message || `Request failed (${res.status})`);
     if (data.code) err.code = data.code;
     throw err;
   }
-
   return data;
 }
 
-/* ---------- Base64URL helpers ---------- */
-
-const enc = (buffer) =>
-  btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
-const dec = (value) => {
-  const padded =
-    value.replace(/-/g, "+").replace(/_/g, "/") +
-    "=".repeat((4 - (value.length % 4)) % 4);
-
-  return Uint8Array.from(atob(padded), (char) =>
-    char.charCodeAt(0)
-  ).buffer;
-};
-
-/* ---------- Device ID (one phone, one account) ---------- */
-
-const DEVICE_ID_KEY = "eachrights_device_id";
-
-// A random ID stored on this phone's browser. The server uses it to make sure
-// one phone is linked to only one staff account.
-export const getDeviceId = () => {
-  try {
-    let id = localStorage.getItem(DEVICE_ID_KEY);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(DEVICE_ID_KEY, id);
-    }
-    return id;
-  } catch {
-    throw new Error(
-      "This browser blocks storage, so the phone cannot be identified. Turn off private browsing and try again."
-    );
-  }
-};
-
-/* ---------- WebAuthn capability checks ---------- */
-
-// WebAuthn requires HTTPS or localhost and a supported browser.
-// A PC without a fingerprint reader is fine for clocking in: it can use a phone through the QR code.
-export const fingerprintSupported = () =>
-  typeof window !== "undefined" &&
-  window.isSecureContext &&
-  !!window.PublicKeyCredential;
-
-// Whether THIS device has its own fingerprint/face/PIN authenticator.
-// Registration now requires it (register on the phone itself).
-export const platformAvailable = async () => {
-  try {
-    if (!fingerprintSupported()) return false;
-
-    return await window.PublicKeyCredential
-      .isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch {
-    return false;
-  }
-};
-
-/* ---------- Attendance status ---------- */
-
-export const getStatus = () =>
-  call("/me/attendance/status");
-
-/* ---------- Administrator phone approvals ---------- */
-
-const itemsOf = (result) => (Array.isArray(result) ? result : result?.items || []);
-
-// Phones waiting for approval (the backend returns only pending requests here).
-export async function listDeviceRequests() {
-  return itemsOf(await call("/me/attendance/device-requests"));
-}
-
-// Approved phones that are still in use (administrator).
-// Each item has requestId, userId, credentialId, staffName, staffEmail, label,
-// createdAt, decidedAt and deviceRef (short phone reference). If the request
-// fails it throws, and the Phones tab then shows its "isn't available yet" message.
-export async function listApprovedDevices() {
-  return itemsOf(await call("/me/attendance/devices"));
-}
-
-// decision must be "approved" or "rejected".
-export const decideDeviceRequest = (
-  requestId,
-  { decision, note } = {}
-) =>
-  call(
-    `/me/attendance/device-requests/${encodeURIComponent(requestId)}/decision`,
-    {
-      method: "POST",
-      body: JSON.stringify({ decision, note }),
-    }
-  );
-
-// Administrator-only action.
-// Revokes a staff member's approved WebAuthn credential.
-export const revokeDevice = (userId, credentialId) =>
-  call(
-    `/me/attendance/admin-credentials/${encodeURIComponent(userId)}/${encodeURIComponent(credentialId)}`,
-    {
-      method: "DELETE",
-    }
-  );
-
-// Kept so any older code importing the previous name still works.
-export const adminRevokeDevice = revokeDevice;
-
-/* ---------- Working from home ---------- */
-
-// Records "working from home today" for the signed-in person.
-export const setWorkingFromHome = () =>
-  call("/me/attendance/wfh", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-
-// Administrator: who is working from home on a day (YYYY-MM-DD, default today).
-export async function listWorkingFromHome(day) {
-  const result = await call(`/me/attendance/wfh${day ? `?day=${encodeURIComponent(day)}` : ""}`);
-  return result?.items || [];
-}
-
-/* ---------- Attendance records ---------- */
-
-const listRecords = ({
-  scope = "me",
-  from,
-  to,
-  cursor,
-  limit,
-} = {}) => {
-  const params = new URLSearchParams({ scope });
-
-  if (from) params.set("from", from);
-  if (to) params.set("to", to);
-  if (cursor) params.set("cursor", cursor);
-  if (limit) params.set("limit", String(limit));
-
-  return call(`/me/attendance/records?${params.toString()}`);
-};
-
-// Retrieves up to 10 pages of 500 records each.
-export async function listAllRecords(params = {}) {
-  let items = [];
-  let cursor = null;
-
-  for (let page = 0; page < 10; page += 1) {
-    const result = await listRecords({
-      ...params,
-      cursor,
-      limit: 500,
-    });
-
-    items = items.concat(result?.items || []);
-    cursor = result?.cursor || null;
-
-    if (!cursor) break;
-  }
-
-  return items;
-}
-
-/* ---------- Leave ---------- */
-
 const query = (params = {}) => {
   const search = new URLSearchParams();
-
   Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      search.set(key, String(value));
-    }
+    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
   });
-
   return search.toString();
 };
 
-// Approved leave.
-// scope "all" returns everyone; scope "me" returns the signed-in user.
-export async function listLeave({
-  scope = "all",
-  from,
-  to,
-} = {}) {
-  const result = await call(
-    `/me/leave/away?${query({ scope, from, to })}`
-  );
+/* ---------- Clocking settings ---------- */
 
-  return result?.items || [];
+// { phoneClocking, allowedIps, workStart, workEnd, graceMinutes }
+export const getConfig = () => call("/me/attendance/config");
+
+// Administrator. Send any of the fields above.
+export const saveConfig = (config) =>
+  call("/me/attendance/config", { method: "PUT", body: JSON.stringify(config) });
+
+/* ---------- Public holidays ---------- */
+
+export async function listHolidays(year) {
+  const result = await call(`/me/attendance/holidays?${query({ year })}`);
+  return result?.holidays || [];
 }
 
-// Leave requests and their status.
-export async function listLeaveRequests({
-  scope = "me",
-  status,
-} = {}) {
-  const result = await call(
-    `/me/leave/requests?${query({ scope, status })}`
-  );
+// Administrator: { date: "YYYY-MM-DD", name }
+export const addHoliday = (holiday) =>
+  call("/me/attendance/holidays", { method: "POST", body: JSON.stringify(holiday) });
 
-  return result?.items || [];
-}
-
-// Submit a leave request: { type, from, to, reason }
-export const requestLeave = (request) =>
-  call("/me/leave/requests", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-
-// Cancel one of your own leave requests.
-export const cancelLeave = (id) =>
-  call(`/me/leave/requests/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-
-// Administrator/CEO leave decision.
-export const decideLeave = (
-  id,
-  { decision, note } = {}
-) =>
-  call(
-    `/me/leave/requests/${encodeURIComponent(id)}/decision`,
-    {
-      method: "POST",
-      body: JSON.stringify({ decision, note }),
-    }
-  );
-
-/* ---------- Scanner setup (administrator) ---------- */
-
-// Returns { items: [{ scannerId, name, email }] }.
-export const listStaffLinks = () =>
-  call("/me/attendance/staff-links");
-
-// link = { scannerId, name, email }
-export const saveStaffLink = (link) =>
-  call("/me/attendance/staff-links", {
-    method: "POST",
-    body: JSON.stringify(link),
-  });
-
-export const deleteStaffLink = (scannerId) =>
-  call(
-    `/me/attendance/staff-links/${encodeURIComponent(scannerId)}`,
-    {
-      method: "DELETE",
-    }
-  );
-
-// punches = [{ scannerId, at }]
-// at must be an ISO timestamp.
-export async function importPunches(punches = []) {
-  const CHUNK_SIZE = 500;
-
-  const total = {
-    accepted: 0,
-    duplicates: 0,
-    rejectedCount: 0,
-  };
-
-  for (let index = 0; index < punches.length; index += CHUNK_SIZE) {
-    const result = await call("/me/attendance/import", {
-      method: "POST",
-      body: JSON.stringify({
-        punches: punches.slice(index, index + CHUNK_SIZE),
-      }),
-    });
-
-    total.accepted += result?.accepted || 0;
-    total.duplicates += result?.duplicates || 0;
-    total.rejectedCount += result?.rejectedCount || 0;
-  }
-
-  return total;
-}
-
-/* ---------- WebAuthn device registration ---------- */
-
-// Registers THIS phone using its own fingerprint/face/PIN. The phone's device ID
-// is sent so the server can refuse a phone that is already linked to another account.
-// New registrations remain pending until an administrator approves.
-export async function registerDevice(label) {
-  if (!fingerprintSupported()) {
-    throw new Error(
-      "Secure WebAuthn is not available. Use HTTPS and an updated browser."
-    );
-  }
-
-  const deviceId = getDeviceId();
-  console.log("REGISTER v2, deviceId =", deviceId);
-
-  const options = await call(
-    "/me/attendance/register/options",
-    {
-      method: "POST",
-      body: JSON.stringify({ deviceId }),
-    }
-  );
-
-  const credential = await navigator.credentials.create({
-    publicKey: {
-      challenge: dec(options.challenge),
-      rp: options.rp,
-      user: {
-        id: dec(options.user.id),
-        name: options.user.name,
-        displayName: options.user.displayName,
-      },
-      pubKeyCredParams: [
-        { type: "public-key", alg: -7 },   // ES256
-        { type: "public-key", alg: -257 }, // RS256
-      ],
-      authenticatorSelection: {
-        // This device only: no QR code / "use another phone" flow, so the
-        // credential is created on the same phone that holds the device ID.
-        authenticatorAttachment: "platform",
-        userVerification: "required",
-        residentKey: "discouraged",
-      },
-      excludeCredentials: (options.excludeCredentials || []).map(
-        (id) => ({
-          type: "public-key",
-          id: dec(id),
-        })
-      ),
-      attestation: "none",
-      timeout: 120000,
-    },
-  });
-
-  if (!credential) {
-    throw new Error("Device registration was cancelled.");
-  }
-
-  const response = credential.response;
-
-  if (
-    !response.getPublicKey ||
-    !response.getAuthenticatorData
-  ) {
-    throw new Error(
-      "This browser does not support the required WebAuthn features. Update Chrome, Edge, Safari or Firefox."
-    );
-  }
-
-  return call("/me/attendance/register", {
-    method: "POST",
-    body: JSON.stringify({
-      deviceId,
-      credential: {
-        id: credential.id,
-        clientDataJSON: enc(response.clientDataJSON),
-        authenticatorData: enc(response.getAuthenticatorData()),
-        publicKey: enc(response.getPublicKey()),
-        publicKeyAlg: response.getPublicKeyAlgorithm(),
-        label,
-      },
-    }),
-  });
-}
+export const deleteHoliday = (date) =>
+  call(`/me/attendance/holidays/${encodeURIComponent(date)}`, { method: "DELETE" });
 
 /* ---------- Clock in / clock out ---------- */
 
-// type must be "in" or "out".
-// The server verifies the WebAuthn signature and records server time.
-export async function punch(type) {
-  if (!fingerprintSupported()) {
-    throw new Error(
-      "Secure WebAuthn is not available. Use HTTPS and an updated browser."
-    );
-  }
+// { date, record, canClock, reason, config: { workStart, workEnd } }
+export const getToday = () => call("/me/attendance/today");
 
-  if (type !== "in" && type !== "out") {
-    throw new Error("Invalid attendance action.");
-  }
+// action: "in" | "out", device: "phone" | "laptop". Returns the updated record.
+export const clock = (action, device) =>
+  call("/me/attendance/clock", { method: "POST", body: JSON.stringify({ action, device }) });
 
-  const options = await call(
-    "/me/attendance/punch/options",
-    {
-      method: "POST",
-      body: JSON.stringify({ type }),
-    }
-  );
+/* ---------- Records ---------- */
 
-  if (!options.allowCredentials?.length) {
-    throw new Error(
-      "No approved phone is registered for this account. Register your device and wait for administrator approval."
-    );
-  }
+// from and to are plain dates (YYYY-MM-DD). userId is administrator-only.
+// Returns { userId, from, to, days: [{ date, state, note?, record }], summary }.
+export const getRecords = ({ from, to, userId } = {}) =>
+  call(`/me/attendance/records?${query({ from, to, userId })}`);
 
-  const credential = await navigator.credentials.get({
-    publicKey: {
-      challenge: dec(options.challenge),
-      rpId: options.rpId,
-      allowCredentials: options.allowCredentials.map((id) => ({
-        type: "public-key",
-        id: dec(id),
-        // "hybrid" = phone through the QR code; "internal" = this device itself.
-        transports: ["hybrid", "internal"],
-      })),
-      // Chrome 128+: lead with the phone/QR option. Ignored by other browsers.
-      hints: ["hybrid"],
-      userVerification: "required",
-      timeout: 120000,
-    },
+// Administrator: everybody's records for one day. Returns { date, records }.
+export const getDay = (date) => call(`/me/attendance/day?${query({ date })}`);
+
+// Administrator correction. body = { in: "HH:MM", out: "HH:MM", userName? }. An empty string clears that time.
+export const correctRecord = (userId, date, body) =>
+  call(`/me/attendance/records/${encodeURIComponent(userId)}/${encodeURIComponent(date)}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
   });
 
-  if (!credential) {
-    throw new Error("Attendance verification was cancelled.");
+// Administrator: punches = [{ userId, userName?, timestamp }] with ISO timestamps.
+// The earliest punch of each day becomes the clock in, the latest the clock out.
+export async function importPunches(punches = []) {
+  const CHUNK_SIZE = 1000; // the API accepts at most 1000 per request
+  let records = 0;
+  for (let i = 0; i < punches.length; i += CHUNK_SIZE) {
+    const result = await call("/me/attendance/import", {
+      method: "POST",
+      body: JSON.stringify({ punches: punches.slice(i, i + CHUNK_SIZE) }),
+    });
+    records += result?.records || 0;
   }
+  return { records };
+}
 
-  const response = credential.response;
+/* ---------- Leave (requestRoutes.mjs) ---------- */
 
-  return call("/me/attendance/punch", {
+const LEAVE_TYPES = ["annual", "sick", "maternity", "paternity", "compassionate", "study", "unpaid"];
+const LEAVE_WHEN = ["active", "current", "upcoming", "past", "all"];
+
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+// "Annual", "Sick leave", "annual_leave" -> "annual", "sick", ...
+const normalizeLeaveType = (value) => {
+  const v = String(value ?? "").trim().toLowerCase().replace(/[\s_-]*leave$/, "").trim();
+  return LEAVE_TYPES.includes(v) ? v : String(value ?? "");
+};
+
+// Give API records the field names the Attendance page uses.
+const toUiLeave = (r) => ({
+  ...r,
+  from: r.startDate,
+  to: r.endDate,
+  name: r.userName,
+  type: r.type ? cap(r.type) : r.type,
+  decidedBy: r.reviewedBy,
+  decisionNote: r.reviewNote,
+});
+
+// Approved leave. Accepts "active" | "current" | "upcoming" | "past" | "all",
+// or { from, to } (the page passes this) to limit the dates shown.
+export async function listLeave(arg) {
+  const range = arg && typeof arg === "object" ? arg : {};
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+  let when = typeof arg === "string" && LEAVE_WHEN.includes(arg) ? arg : "active";
+  if (range.to && range.to < today) when = "past";
+
+  const result = await call(`/me/leave/on-leave?${query({ when })}`);
+  return (result?.people || [])
+    .filter((p) => (!range.from || p.endDate >= range.from) && (!range.to || p.startDate <= range.to))
+    .map(toUiLeave);
+}
+
+// My requests (scope "me") or everyone's (scope "all", administrator only).
+export async function listLeaveRequests({ scope = "me", status } = {}) {
+  const result = await call(`/me/leave?${query({ scope: scope === "all" ? "all" : undefined, status })}`);
+  return (result?.requests || []).map(toUiLeave);
+}
+
+// Submit a leave request. Accepts { type, from, to } or { type, startDate, endDate }, plus reason and handoverTo.
+export const requestLeave = (request = {}) => {
+  const { from, to, startDate, endDate, type, ...rest } = request;
+  return call("/me/leave", {
     method: "POST",
     body: JSON.stringify({
-      type,
-      credential: {
-        id: credential.id,
-        clientDataJSON: enc(response.clientDataJSON),
-        authenticatorData: enc(response.authenticatorData),
-        signature: enc(response.signature),
-      },
+      ...rest,
+      type: normalizeLeaveType(type),
+      startDate: startDate ?? from,
+      endDate: endDate ?? to,
     }),
   });
-}
+};
+
+// Cancel one of your own requests (pending, or approved and not yet started).
+export const cancelLeave = (id) =>
+  call(`/me/leave/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({}) });
+
+// decision: "approve" | "approved" | "reject" | "rejected". The API needs a note when rejecting.
+export const decideLeave = (id, { decision, note } = {}) => {
+  const action = String(decision).startsWith("approve")
+    ? "approve"
+    : String(decision).startsWith("reject")
+    ? "reject"
+    : "";
+  if (!action) return Promise.reject(new Error("Choose approve or reject."));
+  return call(`/me/leave/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    body: JSON.stringify({ note: note || (action === "reject" ? "Not approved." : "") }),
+  });
+};
+
+// My leave days used this year: { year, annual: { entitlement, used, pending, remaining }, used, pending }
+export const getLeaveBalance = (year) => call(`/me/leave/balance?${query({ year })}`);

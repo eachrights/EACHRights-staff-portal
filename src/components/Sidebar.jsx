@@ -31,8 +31,8 @@ import {
   Plane,
   Layers,
   Building2,
-  Landmark,
   Wallet,
+  Banknote,
 } from "lucide-react";
 
 import {
@@ -50,9 +50,9 @@ import { LABELS } from "../labels";
  *
  * Layout, top to bottom:
  *   Home
- *   My workplace          Attendance and leave, Travel, Requisitions
+ *   My workplace          Attendance and leave, Travel, Requisitions, Finance
  *   Programmes & results  M&E (collapsible)
- *   Files                 All files, Programmes, Departments, Finance
+ *   Files                 All files, Programmes, Departments
  *   Administration        (administrator only)
  */
 
@@ -252,7 +252,7 @@ function Sidebar({ mobileOpen, onClose }) {
   const onAttendance = pathname.startsWith("/attendance");
   const onTravel = pathname.startsWith("/travel");
   const onRequisitions = pathname.startsWith("/requisitions");
-  const onFinance = pathname.startsWith("/admin/finance");
+  const onFinance = pathname.startsWith("/finance");
 
   // Groups start closed and open by themselves when you are inside them
   const [meOpen, setMeOpen] = usePersisted("nav-me-open", onMe);
@@ -398,6 +398,11 @@ function Sidebar({ mobileOpen, onClose }) {
                 Requisitions
               </NavItem>
             </li>
+            <li className="flex">
+              <NavItem to="/finance" active={onFinance} onClick={onClose} icon={Banknote}>
+                Finance
+              </NavItem>
+            </li>
           </ul>
 
           {/* PROGRAMMES AND RESULTS */}
@@ -540,16 +545,6 @@ function Sidebar({ mobileOpen, onClose }) {
                     ))}
                   </ul>
                 )}
-              </li>
-            )}
-
-            {/* Finance */}
-            {canSee("finance") && (
-              <li className="flex">
-                <NavItem to="/admin/finance" active={onFinance} onClick={onClose} icon={Landmark}>
-                  <span className="flex-1">Finance</span>
-                  <Lock size={13} strokeWidth={ICON_STROKE} className="text-[#D98A00]" aria-label="Restricted" />
-                </NavItem>
               </li>
             )}
           </ul>

@@ -1,5 +1,8 @@
-// API helpers for the M&E workplan and calendar.
-// Uses the same sign-in session and API address as the attendance pages.
+// API helpers for the M&E workplan, calendar and audit trail.
+// Matches workplanRoutes.mjs:
+//   /me/workplan   GET list, POST create, PUT /{id} update, DELETE /{id}
+//   /me/events     GET { events, holidays, leave, activities }, POST create, PUT /{id} update, DELETE /{id}
+//   /me/audit      GET ?month=YYYY-MM&entity&limit (administrator) -> { entries }
 
 // VITE_API_URL comes first because this was the address the workplan used before.
 // If it is not set, the attendance API address is used.
@@ -70,6 +73,7 @@ async function call(path, options = {}) {
         : "You are not signed in. Please sign in again."
     );
     err.code = "UNAUTHORIZED";
+    err.status = 401;
     throw err;
   }
 
@@ -93,26 +97,130 @@ async function call(path, options = {}) {
   return data;
 }
 
-// POST creates or updates (the backend upserts by id)
-export const listActivities = () => call("/me/workplan");
+// The API may return a bare list or an object that holds the list. Always give back an array.
+const asList = (data, ...keys) => {
+  if (Array.isArray(data)) return data;
+  for (const k of [...keys, "items"]) if (Array.isArray(data?.[k])) return data[k];
+  return Object.values(data || {}).find(Array.isArray) || [];
+};
+
+/* ---------- Workplan ---------- */
+
+// The page says "Not started"; the API says "planned", and so on.
+const STATUS_TO_API = { "Not started": "planned", "In progress": "in-progress", Done: "done", Delayed: "delayed" };
+const STATUS_TO_UI = {
+  planned: "Not started",
+  "in-progress": "In progress",
+  done: "Done",
+  delayed: "Delayed",
+  cancelled: "Not started",
+};
+
+// API activity -> the shape WorkPlan.jsx uses
+const toUiActivity = (a) => ({
+  id: a.id,
+  title: a.title,
+  project: a.project || "",
+  owner: a.responsible || "",
+  priority: a.priority || "Medium",
+  start: a.startDate,
+  end: a.endDate,
+  status: STATUS_TO_UI[a.status] || "Not started",
+  progress: Number(a.progress) || 0,
+  notes: a.description || "",
+  updatedAt: a.updatedAt,
+});
+
+// WorkPlan.jsx activity -> what the API reads
+const toApiActivity = (a) => ({
+  title: a.title,
+  project: a.project || "",
+  responsible: a.owner || "",
+  priority: a.priority || "Medium",
+  startDate: a.start,
+  endDate: a.end,
+  status: STATUS_TO_API[a.status] || "planned",
+  progress: Number(a.progress) || 0,
+  description: a.notes || "",
+});
+
+export const listActivities = () =>
+  call("/me/workplan").then((d) => asList(d, "activities").map(toUiActivity));
+
+// An activity with an id is updated (PUT); one without is created (POST).
 export const saveActivity = (a) =>
-  call("/me/workplan", { method: "POST", body: JSON.stringify(a) });
+  a.id
+    ? call(`/me/workplan/${encodeURIComponent(a.id)}`, { method: "PUT", body: JSON.stringify(toApiActivity(a)) }).then(toUiActivity)
+    : call("/me/workplan", { method: "POST", body: JSON.stringify(toApiActivity(a)) }).then(toUiActivity);
+
 export const deleteActivity = (id) =>
   call(`/me/workplan/${encodeURIComponent(id)}`, { method: "DELETE" });
 
-export const listEvents = () => call("/me/events");
+/* ---------- Calendar events ---------- */
+
+export const listEvents = () => call("/me/events").then((d) => asList(d, "events"));
+
+// An event with an id is updated (PUT); one without is created (POST).
 export const saveEvent = (e) =>
-  call("/me/events", { method: "POST", body: JSON.stringify(e) });
+  e?.id
+    ? call(`/me/events/${encodeURIComponent(e.id)}`, { method: "PUT", body: JSON.stringify(e) })
+    : call("/me/events", { method: "POST", body: JSON.stringify(e) });
+
 export const deleteEvent = (id) =>
   call(`/me/events/${encodeURIComponent(id)}`, { method: "DELETE" });
 
-// Audit trail. With entity + id: that item's history. Without id: the full
-// trail (administrators only). Returns { items, cursor } for paging.
-export const listAudit = ({ entity, id, cursor, limit } = {}) => {
-  const p = new URLSearchParams();
-  if (entity) p.set("entity", entity);
-  if (id) p.set("id", id);
-  if (cursor) p.set("cursor", cursor);
-  if (limit) p.set("limit", String(limit));
-  return call(`/me/audit?${p.toString()}`);
+/* ---------- Audit trail ---------- */
+
+// The page says "events"; the audit records say "event".
+const ENTITY_TO_API = { events: "event" };
+const ENTITY_TO_UI = { event: "events" };
+
+// API entry { id, at, actor, action: "request.approve", entity, entityId, detail }
+// -> the shape AuditTrail.jsx uses.
+const toUiAudit = (e) => ({
+  auditId: e.id,
+  at: e.at,
+  actor: { name: e.actor || "", email: String(e.actor || "").includes("@") ? e.actor : "" },
+  action: String(e.action || "").split(".").pop(), // "request.approve" -> "approve"
+  entity: ENTITY_TO_UI[e.entity] || e.entity,
+  entityId: e.entityId,
+  title: e.detail || e.entityId || "",
+  detail: e.detail || "",
+  changes: [],
+});
+
+const MONTHS_BACK = 24;
+const prevMonth = (m) => {
+  const [y, mo] = m.split("-").map(Number);
+  return new Date(Date.UTC(y, mo - 2, 1)).toISOString().slice(0, 7);
 };
+
+// The API holds the trail one month at a time, newest month first (administrators only).
+// cursor = the next month to read. With entity + id: only that item's entries.
+// Returns { items, cursor }; cursor is null when there is nothing older to load.
+export async function listAudit({ entity, id, cursor, limit } = {}) {
+  let month = cursor || new Date().toISOString().slice(0, 7);
+  let floor = new Date().toISOString().slice(0, 7);
+  for (let i = 0; i < MONTHS_BACK; i += 1) floor = prevMonth(floor);
+
+  const maxMonths = id ? 12 : 6; // how far to look in one go when a month is empty
+  let items = [];
+
+  try {
+    for (let i = 0; i < maxMonths; i += 1) {
+      const p = new URLSearchParams({ month });
+      if (entity) p.set("entity", ENTITY_TO_API[entity] || entity);
+      if (limit) p.set("limit", String(limit));
+      const data = await call(`/me/audit?${p.toString()}`);
+      items = (data?.entries || []).map(toUiAudit).filter((e) => !id || e.entityId === id);
+      month = prevMonth(month);
+      if (items.length || month < floor) break;
+    }
+  } catch (err) {
+    // The history tab is open to everyone, but the audit trail is for administrators
+    if (id && err.status === 403) return { items: [], cursor: null };
+    throw err;
+  }
+
+  return { items, cursor: month >= floor ? month : null };
+}

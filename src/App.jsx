@@ -20,7 +20,6 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import StaffUsers from "./pages/admin/StaffUsers";
 import SharedFiles from "./pages/admin/SharedFiles";
 import Programs from "./pages/admin/Programs";
-import Finance from "./pages/admin/Finance";
 import AdminUpload from "./pages/admin/AdminUpload";
 import Settings from "./pages/admin/Settings";
 
@@ -51,6 +50,8 @@ import Travel from "./pages/travel/Travel";
 // Financial requisitions (fund requests raised against a project)
 // Adjust this path if MyRequisitions.jsx is saved in a different folder.
 import MyRequisitions from "./pages/admin/me-dashboard/MyRequisitions";
+// Finance: transactions, approvals, budget (Finance.jsx and financeApi.js both live in src/pages/services)
+import Finance from "./pages/services/Finance";
 // Approvals and the portfolio roll-up (administrator only)
 import PortfolioView from "./pages/admin/me-dashboard/PortfolioView";
 
@@ -90,11 +91,10 @@ function App() {
 
         {/* =====================================================
             SHARED SHELL (sidebar and header)
-            Home, Attendance, Travel, Requisitions and M&E sit under ONE layout
-            route, so the sidebar stays mounted while moving between them.
-            Before, each page built its own shell, so the sidebar was torn down
-            and rebuilt on every click (it "popped" in and out and forgot which
-            menus were open).
+            Home, Attendance, Travel, Requisitions, Finance and M&E sit under
+            ONE layout route, so the sidebar stays mounted while moving
+            between them. Pages inside it must NOT render their own
+            Header or Sidebar.
             Add new staff pages inside this route.
         ====================================================== */}
         <Route
@@ -117,73 +117,76 @@ function App() {
               The API decides who can raise, approve and mark requests as paid. */}
           <Route path="/requisitions" element={<MyRequisitions />} />
 
-        {/* =====================================================
-            M&E (staff and administrator)
-            Any signed-in user can open these. What they can see and
-            report on is limited by the results Lambda, using their
-            department groups. The shell is shared, so the sidebar
-            stays mounted while moving between M&E pages.
-            Sidebar links must match these paths exactly.
-        ====================================================== */}
-        <Route path="/me-dashboard" element={<Outlet />}>
-          <Route index element={<MEDashboard />} />
+          {/* FINANCE: income and expense transactions linked to projects, with
+              receipts, approval and budgets. The finance Lambda decides who can
+              submit (finance_staff) and approve (finance_approver). */}
+          <Route path="/finance" element={<Finance />} />
 
-          {/* Projects: the list, and a project's dashboard (opened with ?project=<id>) */}
-          <Route path="projects" element={<MEProjects />} />
+          {/* =====================================================
+              M&E (staff and administrator)
+              Any signed-in user can open these. What they can see and
+              report on is limited by the results Lambda, using their
+              department groups. Sidebar links must match these paths exactly.
+          ====================================================== */}
+          <Route path="/me-dashboard" element={<Outlet />}>
+            <Route index element={<MEDashboard />} />
 
-          <Route path="frameworks" element={<MEFrameworks />} />
+            {/* Projects: the list, and a project's dashboard (opened with ?project=<id>) */}
+            <Route path="projects" element={<MEProjects />} />
 
-          {/* Import a framework (or all the details of a project) from a file.
-              The API decides who can import where, so this page is open to any signed-in user. */}
-          <Route path="import-framework" element={<ImportFramework />} />
+            <Route path="frameworks" element={<MEFrameworks />} />
 
-          {/* Indicators */}
-          <Route path="indicators" element={<MEIndicators />} />
+            {/* Import a framework (or all the details of a project) from a file.
+                The API decides who can import where, so this page is open to any signed-in user. */}
+            <Route path="import-framework" element={<ImportFramework />} />
 
-          <Route path="library" element={<MELibrary />} />
+            {/* Indicators */}
+            <Route path="indicators" element={<MEIndicators />} />
 
-          {/* Forms: fill in a reporting period, and the library to build,
-              copy, template and share forms */}
-          <Route path="forms" element={<MEForms />} />
-          <Route path="form-library" element={<FormLibrary />} />
+            <Route path="library" element={<MELibrary />} />
 
-          {/* Data: indicator data, and tables for importing and linking data */}
-          <Route path="data" element={<MEData />} />
-          <Route path="data-tables" element={<DataTables />} />
+            {/* Forms: fill in a reporting period, and the library to build,
+                copy, template and share forms */}
+            <Route path="forms" element={<MEForms />} />
+            <Route path="form-library" element={<FormLibrary />} />
 
-          {/* Workplan and calendar: activities with owners and dates, and a
-              calendar that shows them alongside meetings, trainings and deadlines */}
-          <Route path="workplan" element={<MEWorkPlan />} />
-          <Route path="calendar" element={<MECalendar />} />
+            {/* Data: indicator data, and tables for importing and linking data */}
+            <Route path="data" element={<MEData />} />
+            <Route path="data-tables" element={<DataTables />} />
 
-          {/* Audit trail (administrator only, the API enforces it too) */}
-          <Route
-            path="audit"
-            element={
-              <ProtectedRoute requireAdmin>
-                <AuditLog />
-              </ProtectedRoute>
-            }
-          />
+            {/* Workplan and calendar: activities with owners and dates, and a
+                calendar that shows them alongside meetings, trainings and deadlines */}
+            <Route path="workplan" element={<MEWorkPlan />} />
+            <Route path="calendar" element={<MECalendar />} />
 
-          {/* Approvals and portfolio (administrator only, the API enforces it too) */}
-          <Route
-            path="portfolio"
-            element={
-              <ProtectedRoute requireAdmin>
-                <PortfolioView />
-              </ProtectedRoute>
-            }
-          />
+            {/* Audit trail (administrator only, the API enforces it too) */}
+            <Route
+              path="audit"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AuditLog />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route path="insights" element={<MEInsights />} />
-          <Route path="reports" element={<MEReports />} />
-          <Route path="predictions" element={<MEPredictions />} />
-          <Route path="guides" element={<MEGuides />} />
+            {/* Approvals and portfolio (administrator only, the API enforces it too) */}
+            <Route
+              path="portfolio"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <PortfolioView />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* Unknown M&E URLs go back to the M&E dashboard */}
-          <Route path="*" element={<Navigate to="/me-dashboard" replace />} />
-        </Route>
+            <Route path="insights" element={<MEInsights />} />
+            <Route path="reports" element={<MEReports />} />
+            <Route path="predictions" element={<MEPredictions />} />
+            <Route path="guides" element={<MEGuides />} />
+
+            {/* Unknown M&E URLs go back to the M&E dashboard */}
+            <Route path="*" element={<Navigate to="/me-dashboard" replace />} />
+          </Route>
         </Route>
 
         {/* =====================================================
@@ -220,9 +223,6 @@ function App() {
 
           {/* Programs */}
           <Route path="programs" element={<Programs />} />
-
-          {/* Finance */}
-          <Route path="finance" element={<Finance />} />
 
           {/* =====================================================
               ADMINISTRATION

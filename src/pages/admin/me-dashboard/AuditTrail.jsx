@@ -18,9 +18,47 @@ const FIELD = {
   allDay: "All day",
   description: "Description",
 };
-const ENTITY = { workplan: "Workplan activity", events: "Calendar event", attendance: "Attendance device" };
-const ACTION = { create: "Created", update: "Updated", delete: "Deleted" };
-const DOT = { create: "#0F9F77", update: "#3B6FE0", delete: "#E5484D" };
+const ENTITY = {
+  workplan: "Workplan activity",
+  events: "Calendar event",
+  leave: "Leave request",
+  travel: "Travel request",
+  "fund-request": "Fund request",
+  attendance: "Attendance device",
+};
+const NOUN = {
+  workplan: "activity",
+  events: "event",
+  leave: "leave request",
+  travel: "travel request",
+  "fund-request": "fund request",
+};
+const ACTION = {
+  create: "Created",
+  update: "Updated",
+  edit: "Edited",
+  delete: "Deleted",
+  submit: "Submitted",
+  withdraw: "Withdrew",
+  approve: "Approved",
+  reject: "Rejected",
+  cancel: "Cancelled",
+  markPaid: "Marked as paid",
+};
+const DOT = {
+  create: "#0F9F77",
+  update: "#3B6FE0",
+  edit: "#3B6FE0",
+  delete: "#E5484D",
+  approve: "#0F9F77",
+  reject: "#E5484D",
+  cancel: "#98A2B3",
+  withdraw: "#98A2B3",
+  submit: "#E8870A",
+  markPaid: "#5B3FD0",
+};
+const actionLabel = (a) => ACTION[a] || a || "Action";
+const dot = (a) => DOT[a] || "#3B6FE0";
 
 const FOCUS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#5B3FD0]";
@@ -41,6 +79,14 @@ function show(field, v) {
 // One line per change: "Status: In progress to Done"
 const changeLines = (e) =>
   (e.changes || []).map((c) => `${FIELD[c.field] || c.field}: ${show(c.field, c.from)} to ${show(c.field, c.to)}`);
+
+// What to show under "Details": the field changes, otherwise the text the server recorded
+const detailLines = (e) => {
+  const lines = changeLines(e);
+  if (lines.length) return lines;
+  if (e.detail) return [e.detail];
+  return [e.action === "delete" ? "Removed" : e.action === "create" ? "Created" : actionLabel(e.action)];
+};
 
 function timeAgo(iso) {
   const sec = Math.round((new Date(iso) - Date.now()) / 1000);
@@ -75,11 +121,12 @@ function useAudit(entity, id) {
   const fetchPage = useCallback(
     (from) => {
       setLoading(true);
-      return listAudit({ entity, id, cursor: from, limit: 50 })
+      return listAudit({ entity, id, cursor: from, limit: 200 })
         .then((res) => {
           setError("");
-          setRows((prev) => (from ? [...prev, ...res.items] : res.items));
-          setCursor(res.cursor || null);
+          const items = res?.items || [];
+          setRows((prev) => (from ? [...prev, ...items] : items));
+          setCursor(res?.cursor || null);
         })
         .catch((e) => setError(e.message))
         .finally(() => setLoading(false));
@@ -102,18 +149,18 @@ function Entry({ e }) {
   const lines = changeLines(e);
   return (
     <li className="flex gap-3 pb-5 last:pb-0">
-      <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: DOT[e.action] }} />
+      <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: dot(e.action) }} />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
-          <strong className="font-medium">{who(e)}</strong> {ACTION[e.action].toLowerCase()} this{" "}
-          {e.entity === "events" ? "event" : "activity"}
+          <strong className="font-medium">{who(e)}</strong> {actionLabel(e.action).toLowerCase()} this{" "}
+          {NOUN[e.entity] || "item"}
         </p>
         <p className="text-xs text-[#667085]" title={stamp(e.at)}>
           {timeAgo(e.at)}, {stamp(e.at)}
         </p>
-        {lines.length > 0 && (
+        {(lines.length > 0 || e.detail) && (
           <ul className="mt-1.5 space-y-1 rounded-lg bg-[#F6F8F7] p-2 text-xs text-[#475467]">
-            {lines.map((l) => (
+            {(lines.length ? lines : [e.detail]).map((l) => (
               <li key={l}>{l}</li>
             ))}
           </ul>
@@ -156,10 +203,10 @@ function exportCsv(rows) {
       new Date(e.at).toISOString(),
       who(e),
       e.actor?.email,
-      ACTION[e.action],
+      actionLabel(e.action),
       ENTITY[e.entity] || e.entity,
       e.title,
-      changeLines(e).join("; "),
+      detailLines(e).join("; "),
     ]
       .map(esc)
       .join(",")
@@ -203,7 +250,8 @@ export default function AuditLog() {
         <div>
           <h2 className="text-2xl font-semibold">Audit trail</h2>
           <p className="text-sm text-[#667085]">
-            Every change to the workplan and calendar: who made it and when. Records cannot be edited or deleted.
+            Every change to the workplan, calendar, leave, travel and fund requests: who made it and when. Records
+            cannot be edited or deleted.
           </p>
         </div>
         <span className="flex-1" />
@@ -217,13 +265,20 @@ export default function AuditLog() {
           <option value="all">All types</option>
           <option value="workplan">Workplan activities</option>
           <option value="events">Calendar events</option>
-          <option value="attendance">Attendance devices</option>
+          <option value="leave">Leave requests</option>
+          <option value="travel">Travel requests</option>
+          <option value="fund-request">Fund requests</option>
         </select>
         <select className={INPUT} value={action} onChange={(e) => setAction(e.target.value)} aria-label="Filter by action">
           <option value="all">All actions</option>
           <option value="create">Created</option>
           <option value="update">Updated</option>
           <option value="delete">Deleted</option>
+          <option value="submit">Submitted</option>
+          <option value="approve">Approved</option>
+          <option value="reject">Rejected</option>
+          <option value="cancel">Cancelled</option>
+          <option value="markPaid">Marked as paid</option>
         </select>
         <input className={`${INPUT} w-52`} type="search" placeholder="Search by user" value={user} onChange={(e) => setUser(e.target.value)} aria-label="Search by user" />
         <label className="flex items-center gap-2 text-sm text-[#667085]">
@@ -251,7 +306,7 @@ export default function AuditLog() {
           </thead>
           <tbody>
             {shown.map((e) => {
-              const lines = changeLines(e);
+              const lines = detailLines(e);
               return (
                 <tr key={e.auditId} className="border-b border-[#EEF1F0] align-top last:border-0">
                   <td className="whitespace-nowrap px-3 py-3">
@@ -266,26 +321,19 @@ export default function AuditLog() {
                   </td>
                   <td className="px-3 py-3">
                     <span className="flex items-center gap-1.5">
-                      <i className="h-2 w-2 rounded-full" style={{ backgroundColor: DOT[e.action] }} />
-                      {ACTION[e.action]}
+                      <i className="h-2 w-2 rounded-full" style={{ backgroundColor: dot(e.action) }} />
+                      {actionLabel(e.action)}
                     </span>
                   </td>
                   <td className="max-w-[260px] px-3 py-3">
-                    <p className="truncate font-medium">{e.title}</p>
                     <p className="text-xs text-[#667085]">{ENTITY[e.entity] || e.entity}</p>
                   </td>
                   <td className="px-3 py-3 text-xs text-[#475467]">
-                    {lines.length ? (
-                      <ul className="space-y-0.5">
-                        {lines.map((l) => (
-                          <li key={l}>{l}</li>
-                        ))}
-                      </ul>
-                    ) : e.action === "delete" ? (
-                      "Removed"
-                    ) : (
-                      "Created"
-                    )}
+                    <ul className="space-y-0.5">
+                      {lines.map((l) => (
+                        <li key={l}>{l}</li>
+                      ))}
+                    </ul>
                   </td>
                 </tr>
               );
@@ -302,7 +350,7 @@ export default function AuditLog() {
       {cursor && !loading && (
         <div className="mt-4 text-center">
           <button className={BTN} onClick={more}>
-            Load more
+            Load older records
           </button>
         </div>
       )}
