@@ -43,11 +43,12 @@ function readScan() {
     const url = new URL(window.location.href);
     const t = url.searchParams.get("clock");
     if (t) {
-      sessionStorage.setItem(QR_KEY, JSON.stringify({ t, at: Date.now() }));
+      localStorage.setItem(QR_KEY, JSON.stringify({ t, at: Date.now() }));
       url.searchParams.delete("clock");
       window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     }
-    const saved = JSON.parse(sessionStorage.getItem(QR_KEY) || "null");
+    // localStorage, not sessionStorage: it is also filled in by captureClockToken.js before the login page appears
+    const saved = JSON.parse(localStorage.getItem(QR_KEY) || "null");
     if (saved && Date.now() - saved.at < QR_KEEP_MS) return saved;
   } catch {
     /* ignore */
