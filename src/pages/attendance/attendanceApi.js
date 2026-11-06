@@ -1,6 +1,6 @@
 // API helpers for EACHRights staff attendance.
 // Matches the attendance route file (IP-allowlist version):
-//   /me/attendance/config, /holidays, /today, /clock, /records, /day, /import
+//   /me/attendance/config, /holidays, /today, /clock, /records, /day, /import, /device/...
 // Leave uses the /me/leave/... routes from requestRoutes.mjs.
 
 const BASE = (
@@ -80,7 +80,7 @@ const query = (params = {}) => {
 
 /* ---------- Clocking settings ---------- */
 
-// { phoneClocking, allowedIps, workStart, workEnd, graceMinutes }
+// { phoneClocking, allowedIps, requirePasskey, requireQr, workStart, workEnd, graceMinutes }
 export const getConfig = () => call("/me/attendance/config");
 
 // Administrator. Send any of the fields above.
@@ -103,12 +103,37 @@ export const deleteHoliday = (date) =>
 
 /* ---------- Clock in / clock out ---------- */
 
-// { date, record, canClock, reason, config: { workStart, workEnd } }
+// { date, record, canClock, reason, requirePasskey, requireQr, hasPasskey, config: { workStart, workEnd } }
 export const getToday = () => call("/me/attendance/today");
 
-// action: "in" | "out", device: "phone" | "laptop". Returns the updated record.
-export const clock = (action, device) =>
-  call("/me/attendance/clock", { method: "POST", body: JSON.stringify({ action, device }) });
+// action: "in" | "out", device: "phone" | "laptop".
+// extra: { assertion } (the phone's fingerprint/face/PIN answer) and/or { qrToken } (from the printed QR code).
+// Returns the updated record.
+export const clock = (action, device, extra = {}) =>
+  call("/me/attendance/clock", { method: "POST", body: JSON.stringify({ action, device, ...extra }) });
+
+/* ---------- Passkeys (fingerprint, face or PIN on the phone) and the reception QR ---------- */
+
+// { passkeys: [{ id, label, createdAt, lastUsedAt }] }. userId is administrator-only.
+export const getPasskeys = (userId) => call(`/me/attendance/passkey?${query({ userId })}`);
+
+export const getRegisterOptions = () =>
+  call("/me/attendance/passkey/register-options", { method: "POST", body: JSON.stringify({}) });
+
+export const registerPasskey = (body) =>
+  call("/me/attendance/passkey/register", { method: "POST", body: JSON.stringify(body) });
+
+export const getClockChallenge = () =>
+  call("/me/attendance/passkey/challenge", { method: "POST", body: JSON.stringify({}) });
+
+export const deletePasskey = (credentialId, userId) =>
+  call(`/me/attendance/passkey/${encodeURIComponent(credentialId)}?${query({ userId })}`, { method: "DELETE" });
+
+// Administrator (QR poster): { token, version }
+export const getQr = () => call("/me/attendance/qr");
+
+// Administrator: makes a new QR code. The old printed one stops working. Returns { token, version }.
+export const rotateQr = () => call("/me/attendance/qr/rotate", { method: "POST", body: JSON.stringify({}) });
 
 /* ---------- Records ---------- */
 
@@ -129,6 +154,7 @@ export const correctRecord = (userId, date, body) =>
 
 // Administrator: punches = [{ userId, userName?, timestamp }] with ISO timestamps.
 // The earliest punch of each day becomes the clock in, the latest the clock out.
+// Used for the manual "Scanner import" fallback (for example a USB export after an outage).
 export async function importPunches(punches = []) {
   const CHUNK_SIZE = 1000; // the API accepts at most 1000 per request
   let records = 0;
@@ -141,6 +167,22 @@ export async function importPunches(punches = []) {
   }
   return { records };
 }
+
+/* ---------- Scanner device: ID mapping and status (administrator) ---------- */
+
+// { map: { "<scanner number>": { userId, userName? } }, users?: [{ userId, userName }] }
+export const getDeviceMap = () => call("/me/attendance/device/map");
+
+// Replaces the whole map. Returns { map }.
+export const saveDeviceMap = (map) =>
+  call("/me/attendance/device/map", { method: "PUT", body: JSON.stringify({ map }) });
+
+// { lastSeen, lastPunchAt, lastSyncPunches, skipped, serial }  (ISO timestamps)
+export const getDeviceStatus = () => call("/me/attendance/device/status");
+
+// Asks the office agent to sync on its next check.
+export const requestDeviceSync = () =>
+  call("/me/attendance/device/sync", { method: "POST", body: JSON.stringify({}) });
 
 /* ---------- Leave (requestRoutes.mjs) ---------- */
 

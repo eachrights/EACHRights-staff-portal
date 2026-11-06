@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fingerprint, Download, Trash2, Printer } from "lucide-react";
+import QRCode from "qrcode";
 import { getAccess } from "../../access";
 import { WEEKEND_DAYS, holidayName } from "../../holidays";
 import {
@@ -14,12 +15,17 @@ import {
   getDay,
   correctRecord,
   importPunches,
+  getPasskeys,
+  deletePasskey,
+  getQr,
+  rotateQr,
   listLeave,
   listLeaveRequests,
   requestLeave,
   cancelLeave,
   decideLeave,
 } from "./attendanceApi";
+import { passkeysSupported, registerThisDevice, getAssertion } from "./passkeyClient";
 
 /* ---------- time helpers (all shown in Nairobi time) ---------- */
 
@@ -28,6 +34,26 @@ const DAY_MS = 86400000;
 
 // True when the portal is open in a phone's own browser
 const onPhone = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// The printed QR opens this page with ?clock=<token>. Keep the token for the rest of the day and tidy the address bar.
+const QR_KEY = "eachrights_clock_qr";
+const QR_KEEP_MS = 12 * 3600 * 1000;
+function readScan() {
+  try {
+    const url = new URL(window.location.href);
+    const t = url.searchParams.get("clock");
+    if (t) {
+      sessionStorage.setItem(QR_KEY, JSON.stringify({ t, at: Date.now() }));
+      url.searchParams.delete("clock");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }
+    const saved = JSON.parse(sessionStorage.getItem(QR_KEY) || "null");
+    if (saved && Date.now() - saved.at < QR_KEEP_MS) return saved;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 const timeOf = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
@@ -289,6 +315,9 @@ function exportDays(days, prefix) {
   );
 }
 
+const sourceLabel = (source) =>
+  source === "scanner" ? "Office scanner" : source === "admin" ? "Corrected by admin" : source ? "Phone or laptop" : "-";
+
 function exportDay(date, records) {
   downloadCsv(
     ["Date", "Name", "User ID", "Clock in (EAT)", "Clock out (EAT)", "Hours", "Late", "Source"],
@@ -300,9 +329,177 @@ function exportDay(date, records) {
       r.out ? timeOf(r.out) : "",
       r.hours ?? "",
       r.late ? "Yes" : "",
-      r.source === "scanner" ? "Office scanner" : r.source === "admin" ? "Corrected by admin" : "Phone or laptop",
+      sourceLabel(r.source),
     ]),
     `team-attendance-${date}`
+  );
+}
+
+/* ---------- my phone: fingerprint, face or PIN ---------- */
+
+function PasskeyCard({ today, onChange }) {
+  const [items, setItems] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const supported = passkeysSupported();
+
+  const load = useCallback(
+    () =>
+      getPasskeys()
+        .then((r) => setItems(r.passkeys || []))
+        .catch(() => setItems([])),
+    []
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Nothing to show when passkeys are neither required nor already set up and this device can't do them
+  if (!supported && !(items && items.length) && !today.requirePasskey) return null;
+
+  async function onRegister() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await registerThisDevice();
+      setMsg({ ok: true, text: "This device is registered. You will confirm with your fingerprint, face or PIN when you clock in." });
+      await Promise.all([load(), onChange()]);
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemove(p) {
+    if (!window.confirm(`Remove ${p.label}? You will need to register a device again to clock in.`)) return;
+    try {
+      await deletePasskey(p.id);
+      await Promise.all([load(), onChange()]);
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    }
+  }
+
+  return (
+    <section className={`${CARD} mb-6`} aria-label="My phone">
+      <h3 className="font-medium">My phone</h3>
+      <p className="mt-1 text-sm text-[#667085]">
+        {today.requirePasskey
+          ? "To clock in you confirm with your fingerprint, face or screen PIN on a device you have registered."
+          : "Register your phone so clocking in is confirmed with your fingerprint, face or screen PIN."}{" "}
+        Your fingerprint never leaves your phone.
+      </p>
+      <div className="mt-3">
+        <Banner msg={msg} />
+      </div>
+      {items && items.length > 0 && (
+        <ul className="mb-3 divide-y divide-[#EEF1F0] text-sm">
+          {items.map((p) => (
+            <li key={p.id} className="flex items-center gap-3 py-2">
+              <span className="flex-1 font-medium">{p.label}</span>
+              <span className="text-xs text-[#667085]">Added {fullDate(dayKey(p.createdAt))}</span>
+              <button className={`${BTN} px-3 py-1.5`} onClick={() => onRemove(p)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {supported ? (
+        <button className={items?.length ? BTN : BTN_PRIMARY} onClick={onRegister} disabled={busy}>
+          {busy ? "Waiting for your phone..." : items?.length ? "Register this device too" : "Register this device"}
+        </button>
+      ) : (
+        <p className="text-sm text-[#8A4B00]">
+          This browser can't use fingerprint or PIN here. Open the portal in Chrome or Safari over https.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/* ---------- QR poster (administrator): print it and stick it up at the office ---------- */
+
+function QrScreen() {
+  const [token, setToken] = useState(null);
+  const [img, setImg] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    getQr()
+      .then((r) => on && setToken(r.token))
+      .catch((e) => on && setMsg({ ok: false, text: e.message }));
+    return () => {
+      on = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    const url = `${window.location.origin}${window.location.pathname}?clock=${encodeURIComponent(token)}`;
+    QRCode.toDataURL(url, { width: 640, margin: 2 })
+      .then(setImg)
+      .catch(() => setMsg({ ok: false, text: "Could not draw the QR code." }));
+  }, [token]);
+
+  async function onRotate() {
+    if (!window.confirm("Make a new QR code? The one already printed will stop working, so you will need to print and put up the new one.")) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await rotateQr();
+      setToken(r.token);
+      setMsg({ ok: true, text: "New QR code made. Print it and replace the old one." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <section className={`${CARD} mb-6 print:hidden`}>
+        <h3 className="font-medium">QR poster</h3>
+        <p className="mt-1 text-sm text-[#667085]">
+          Print this poster and put it up at the office. Staff scan it with their phone camera, which opens the portal, then
+          tap Clock in. It only works while they are on the office network, so scanning it from home or on mobile data
+          won't let anyone clock in. If a photo of the poster is ever shared around, make a new code.
+        </p>
+        <div className="mt-3">
+          <Banner msg={msg} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className={BTN_PRIMARY} onClick={() => window.print()} disabled={!img}>
+            <Printer size={16} /> Print poster
+          </button>
+          <button className={BTN} onClick={onRotate} disabled={busy || !token}>
+            Make a new code
+          </button>
+        </div>
+      </section>
+
+      <section id="attendance-print" className="rounded-2xl border border-[#E6ECE9] bg-white p-8 text-center">
+        <h2 className="text-3xl font-semibold">Clock in and out</h2>
+        <p className="mt-1 text-base text-[#475467]">EACHRights staff attendance</p>
+        <div className="flex justify-center py-6">
+          {img ? (
+            <img src={img} alt="QR code for clocking in" className="h-80 w-80" />
+          ) : (
+            !msg && <p className="text-sm text-[#667085]">Loading...</p>
+          )}
+        </div>
+        <ol className="mx-auto max-w-md space-y-1 text-left text-base">
+          <li>1. Connect your phone to the office Wi-Fi.</li>
+          <li>2. Scan this code with your phone camera.</li>
+          <li>3. Tap Clock in or Clock out and confirm with your fingerprint, face or PIN.</li>
+        </ol>
+        <p className="mt-4 text-sm text-[#667085]">Works on the office network only.</p>
+      </section>
+    </>
   );
 }
 
@@ -314,6 +511,7 @@ function MyAttendance() {
   const [range, setRange] = useState("week");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [scan] = useState(readScan);
   const now = useNow();
 
   const loadToday = useCallback(
@@ -345,19 +543,25 @@ function MyAttendance() {
 
   // Re-check the office network as soon as the connection changes or the tab regains focus
   useEffect(() => {
-    const refresh = () => loadToday();
+    const refresh = () => {
+      loadToday();
+      loadRecords();
+    };
     window.addEventListener("online", refresh);
     window.addEventListener("focus", refresh);
     return () => {
       window.removeEventListener("online", refresh);
       window.removeEventListener("focus", refresh);
     };
-  }, [loadToday]);
+  }, [loadToday, loadRecords]);
 
   const rec = today?.record;
   const clockedIn = !!rec?.in && !rec?.out;
   const finished = !!rec?.in && !!rec?.out;
   const action = rec?.in ? "out" : "in";
+  const scanOk = !!scan && now - scan.at < QR_KEEP_MS;
+  const needPhone = !!today?.requirePasskey && !today?.hasPasskey;
+  const needQr = !!today?.requireQr && !scanOk;
   const todayDay = data?.days.find((d) => d.date === todayKey());
   const workedToday = rec?.in ? (rec.out ? rec.hours : (now - new Date(rec.in)) / 36e5) : 0;
 
@@ -365,7 +569,10 @@ function MyAttendance() {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await clock(action, onPhone ? "phone" : "laptop");
+      const extra = {};
+      if (today.requirePasskey || today.hasPasskey) extra.assertion = await getAssertion();
+      if (scan && Date.now() - scan.at < QR_KEEP_MS) extra.qrToken = scan.t;
+      const r = await clock(action, onPhone ? "phone" : "laptop", extra);
       setMsg({
         ok: true,
         text: action === "in" ? `Clocked in at ${timeOf(r.in)}.` : `Clocked out at ${timeOf(r.out)}.`,
@@ -394,7 +601,7 @@ function MyAttendance() {
             <div className="flex flex-wrap items-center gap-5">
               <button
                 onClick={onClock}
-                disabled={busy || !today.canClock}
+                disabled={busy || !today.canClock || needPhone || needQr}
                 className={`flex h-28 w-28 shrink-0 flex-col items-center justify-center gap-1 rounded-full text-white transition disabled:opacity-60 motion-reduce:transition-none ${FOCUS} ${
                   action === "out" ? "bg-[#B54708] hover:bg-[#93390A]" : "bg-[#008060] hover:bg-[#00664E]"
                 }`}
@@ -431,8 +638,13 @@ function MyAttendance() {
                   )}
                 </p>
                 <p className="mt-0.5 text-xs text-[#667085]">
-                  You can also press your finger on the office scanner. Both count toward your attendance.
+                  You can also press your finger on the office scanner when it is working. Both count toward your attendance.
                 </p>
+                {needQr && today.canClock && (
+                  <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
+                    Scan the QR code at the office with your phone camera (while on the office Wi-Fi), then tap Clock in.
+                  </p>
+                )}
                 {!today.canClock && today.reason && (
                   <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
                     {today.reason}
@@ -469,6 +681,8 @@ function MyAttendance() {
           )}
         </section>
       </div>
+
+      {today && <PasskeyCard today={today} onChange={loadToday} />}
 
       <SummaryCards summary={data?.summary} />
 
@@ -661,9 +875,6 @@ function TeamAttendance() {
   const late = records.filter((r) => r.late).length;
   const isToday = date === todayKey();
 
-  const sourceText = (r) =>
-    r.source === "scanner" ? "Office scanner" : r.source === "admin" ? "Admin" : r.source ? "Phone or laptop" : "-";
-
   return (
     <>
       {error && <p className="mb-4 rounded-lg bg-[#FDECEA] px-3 py-2 text-sm text-[#8A1C14]">{error}</p>}
@@ -778,7 +989,10 @@ function TeamAttendance() {
                       )}
                     </td>
                     <td className="px-3 py-2.5 font-medium">{hoursText(r.hours)}</td>
-                    <td className="px-3 py-2.5 text-[#667085]">{sourceText(r)}</td>
+                    <td className="px-3 py-2.5 text-[#667085]">
+                      {sourceLabel(r.source)}
+                      {r.verified ? " (passkey)" : ""}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right print:hidden">
                       <button className={`${BTN} px-3 py-1.5`} onClick={() => setEditing(r)}>
                         Correct
@@ -798,7 +1012,7 @@ function TeamAttendance() {
   );
 }
 
-/* ---------- settings (administrator): clocking rules and public holidays ---------- */
+/* ---------- settings (administrator): working hours and public holidays ---------- */
 
 function ClockingSettings() {
   const [form, setForm] = useState(null);
@@ -807,6 +1021,8 @@ function ClockingSettings() {
 
   const toForm = (c) => ({
     phoneClocking: !!c.phoneClocking,
+    requirePasskey: !!c.requirePasskey,
+    requireQr: !!c.requireQr,
     ips: (c.allowedIps || []).join("\n"),
     workStart: c.workStart,
     workEnd: c.workEnd,
@@ -832,6 +1048,8 @@ function ClockingSettings() {
     try {
       const saved = await saveConfig({
         phoneClocking: form.phoneClocking,
+        requirePasskey: form.requirePasskey,
+        requireQr: form.requireQr,
         allowedIps: form.ips.split(/[\s,]+/).filter(Boolean),
         workStart: form.workStart,
         workEnd: form.workEnd,
@@ -868,6 +1086,24 @@ function ClockingSettings() {
               onChange={(e) => setForm((f) => ({ ...f, phoneClocking: e.target.checked }))}
             />
             Allow clocking in from phones and laptops
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[#008060]"
+              checked={form.requirePasskey}
+              onChange={(e) => setForm((f) => ({ ...f, requirePasskey: e.target.checked }))}
+            />
+            Require fingerprint, face or PIN on a registered phone
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[#008060]"
+              checked={form.requireQr}
+              onChange={(e) => setForm((f) => ({ ...f, requireQr: e.target.checked }))}
+            />
+            Require scanning the printed QR code
           </label>
           <label className="block text-xs text-[#667085]">
             Office network addresses (one per line)
@@ -1036,7 +1272,7 @@ function SettingsPanel() {
   );
 }
 
-/* ---------- scanner import (administrator) ---------- */
+/* ---------- scanner import (administrator): manual fallback ---------- */
 
 const DELIMS = [",", "\t", ";"];
 
@@ -1127,10 +1363,11 @@ function ImportFile() {
     <section className={CARD}>
       <h3 className="font-medium">Import from a scanner file</h3>
       <p className="mt-1 text-sm text-[#667085]">
-        Upload the attendance export from the office scanner (CSV or text). Times are read as Nairobi time. For each
-        person and day, the earliest punch becomes the clock in and the latest becomes the clock out. Re-uploading a file
-        is safe. The ID column must hold each person&apos;s portal user ID, otherwise their punches won&apos;t appear
-        in their own attendance.
+        Punches normally arrive from the scanner by themselves. Use this only as a backup, for example to load a USB
+        export after the scanner was offline for days. Times are read as Nairobi time. For each person and day, the
+        earliest punch becomes the clock in and the latest becomes the clock out. Re-uploading a file is safe. The ID
+        column must hold each person&apos;s portal user ID, otherwise their punches won&apos;t appear in their own
+        attendance.
       </p>
       <div className="mt-3">
         <Banner msg={msg} />
@@ -1642,6 +1879,7 @@ export default function Attendance() {
         {tabBtn("leave", "Leave")}
         {access.isAdmin && tabBtn("team", "Team")}
         {access.isAdmin && tabBtn("settings", "Settings")}
+        {access.isAdmin && tabBtn("qr", "QR poster")}
         {access.isAdmin && tabBtn("scanner", "Scanner import")}
       </div>
 
@@ -1651,6 +1889,8 @@ export default function Attendance() {
         <TeamAttendance />
       ) : access.isAdmin && tab === "settings" ? (
         <SettingsPanel />
+      ) : access.isAdmin && tab === "qr" ? (
+        <QrScreen />
       ) : access.isAdmin && tab === "scanner" ? (
         <ImportFile />
       ) : (
