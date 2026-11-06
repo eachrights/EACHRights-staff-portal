@@ -21,17 +21,107 @@ const AUTH_KEY = "eachrights_auth";
 // ID token. If you still get 401 with a fresh sign-in, change this to "accessToken".
 const TOKEN_FIELD = "idToken";
 
-const getToken = () => {
-  for (const store of [sessionStorage, localStorage]) {
+/* ---------- Session handling (expiry check + refresh) ---------- */
+
+const decodeJwt = (token) => {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, "=")));
+  } catch {
+    return null;
+  }
+};
+
+// Seconds left before the token expires (negative = already expired)
+const secondsLeft = (token) => {
+  const exp = decodeJwt(token)?.exp;
+  return exp ? exp - Date.now() / 1000 : -1;
+};
+
+// Every stored session, with the store it lives in so a refresh can save back to the same place
+const readSessions = () => {
+  const found = [];
+  for (const store of [localStorage, sessionStorage]) {
     try {
       const raw = store.getItem(AUTH_KEY);
       if (!raw) continue;
       const session = JSON.parse(raw);
-      const token = session?.[TOKEN_FIELD] || session?.accessToken;
-      if (token) return token;
+      if (session && typeof session === "object") found.push({ store, session });
     } catch {
-      /* ignore a corrupted entry and try the next store */
+      /* ignore a corrupted entry */
     }
+  }
+  return found;
+};
+
+// The session whose token lasts longest, so a stale copy never hides a fresh one
+const bestSession = () => {
+  const all = readSessions();
+  all.sort((a, b) => secondsLeft(b.session[TOKEN_FIELD]) - secondsLeft(a.session[TOKEN_FIELD]));
+  return all[0] || null;
+};
+
+let refreshing = null;
+
+// Exchange the refresh token for new ID/access tokens straight from Cognito.
+// The region and app client id are read from the ID token itself (iss and aud).
+function refreshSession() {
+  if (refreshing) return refreshing; // several calls at once share one refresh
+  refreshing = (async () => {
+    const current = bestSession();
+    const refreshToken = current?.session?.refreshToken;
+    const claims = decodeJwt(current?.session?.idToken || current?.session?.accessToken || "");
+    const region = claims?.iss?.match(/cognito-idp\.([^.]+)\.amazonaws\.com/)?.[1];
+    const clientId = claims?.aud || claims?.client_id;
+    if (!refreshToken || !region || !clientId) return null;
+
+    const res = await fetch(`https://cognito-idp.${region}.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+      },
+      body: JSON.stringify({
+        AuthFlow: "REFRESH_TOKEN_AUTH",
+        ClientId: clientId,
+        AuthParameters: { REFRESH_TOKEN: refreshToken },
+      }),
+    });
+    if (!res.ok) return null; // refresh token expired or revoked: the user must sign in again
+
+    const out = (await res.json())?.AuthenticationResult;
+    if (!out?.IdToken) return null;
+
+    const next = {
+      ...current.session,
+      idToken: out.IdToken,
+      accessToken: out.AccessToken || current.session.accessToken,
+      // Cognito does not return a new refresh token here, so keep the old one
+      refreshToken: out.RefreshToken || refreshToken,
+    };
+    try {
+      current.store.setItem(AUTH_KEY, JSON.stringify(next));
+    } catch {
+      /* storage full or blocked: the new token is still returned for this call */
+    }
+    return next[TOKEN_FIELD] || next.accessToken;
+  })()
+    .catch(() => null)
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+// A usable token: the stored one if it still has more than 60 s left, otherwise a refreshed one
+async function getToken() {
+  const best = bestSession();
+  const token = best?.session?.[TOKEN_FIELD] || best?.session?.accessToken;
+  if (token && secondsLeft(token) > 60) return token;
+  if (best) {
+    const fresh = await refreshSession();
+    if (fresh) return fresh;
+    return token || null; // let the server decide; it will answer 401 if it is dead
   }
   // Older sign-in format, kept so existing sessions still work
   try {
@@ -39,22 +129,35 @@ const getToken = () => {
   } catch {
     return null;
   }
-};
+}
+
+async function send(url, options, token) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+}
 
 async function call(path, options = {}) {
-  const token = getToken();
+  let token = await getToken();
 
   const url = `${BASE}${path}`;
   let res;
   try {
-    res = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.headers || {}),
-      },
-    });
+    res = await send(url, options, token);
+
+    // One retry: the token may have expired in flight or been rejected for age
+    if (res.status === 401) {
+      const fresh = await refreshSession();
+      if (fresh && fresh !== token) {
+        token = fresh;
+        res = await send(url, options, token);
+      }
+    }
   } catch (err) {
     // The browser gives no detail when a request is blocked, so say where it tried to go.
     const here = typeof window !== "undefined" ? window.location.origin : "";
