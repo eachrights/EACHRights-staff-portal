@@ -64,6 +64,9 @@ import PageShell from "./components/PageShell";
 // Signs users out after a period of inactivity
 import IdleTimeout from "./components/IdleTimeout";
 
+//attendance clockpage
+import ClockPage from "./pages/attendance/ClockPage";
+
 function App() {
   return (
     <BrowserRouter>
@@ -256,6 +259,8 @@ function App() {
             Send users back to login
         ====================================================== */}
         <Route path="*" element={<Navigate to="/" replace />} />
+        /*clockpage*/
+        <Route path="/clock" element={<ClockPage />} />
       </Routes>
     </BrowserRouter>
   );

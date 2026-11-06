@@ -389,7 +389,8 @@ function PasskeyCard({ today, onChange }) {
         {today.requirePasskey
           ? "To clock in you confirm with your fingerprint, face or screen PIN on a device you have registered."
           : "Register your phone so clocking in is confirmed with your fingerprint, face or screen PIN."}{" "}
-        Your fingerprint never leaves your phone.
+        Your fingerprint never leaves your phone. If the clock page says your phone isn't registered, remove it here and
+        register it again.
       </p>
       <div className="mt-3">
         <Banner msg={msg} />
@@ -440,7 +441,7 @@ function QrScreen() {
 
   useEffect(() => {
     if (!token) return;
-    const url = `${window.location.origin}${window.location.pathname}?clock=${encodeURIComponent(token)}`;
+    const url = `${window.location.origin}/clock?clock=${encodeURIComponent(token)}`;
     QRCode.toDataURL(url, { width: 640, margin: 2 })
       .then(setImg)
       .catch(() => setMsg({ ok: false, text: "Could not draw the QR code." }));
@@ -466,8 +467,8 @@ function QrScreen() {
       <section className={`${CARD} mb-6 print:hidden`}>
         <h3 className="font-medium">QR poster</h3>
         <p className="mt-1 text-sm text-[#667085]">
-          Print this poster and put it up at the office. Staff scan it with their phone camera, which opens the portal, then
-          tap Clock in. It only works while they are on the office network, so scanning it from home or on mobile data
+          Print this poster and put it up at the office. Staff scan it with their phone camera, which opens a clock page, then
+          tap the button and confirm with their fingerprint, face or PIN. No password is needed. It only works while they are on the office network, so scanning it from home or on mobile data
           won't let anyone clock in. If a photo of the poster is ever shared around, make a new code.
         </p>
         <div className="mt-3">
@@ -496,7 +497,7 @@ function QrScreen() {
         <ol className="mx-auto max-w-md space-y-1 text-left text-base">
           <li>1. Connect your phone to the office Wi-Fi.</li>
           <li>2. Scan this code with your phone camera.</li>
-          <li>3. Tap Clock in or Clock out and confirm with your fingerprint, face or PIN.</li>
+          <li>3. Tap the button and confirm with your fingerprint, face or PIN.</li>
         </ol>
         <p className="mt-4 text-sm text-[#667085]">Works on the office network only.</p>
       </section>
@@ -841,6 +842,67 @@ function PersonHistory({ person, onClose }) {
   );
 }
 
+// Administrator: the phones someone has registered. Remove them when a phone is lost or the person leaves.
+function PersonPhones({ person, onClose }) {
+  const [items, setItems] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const load = useCallback(
+    () =>
+      getPasskeys(person.userId)
+        .then((r) => setItems(r.passkeys || []))
+        .catch((e) => setMsg({ ok: false, text: e.message })),
+    [person.userId]
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function onRemove(p) {
+    if (!window.confirm(`Remove ${p.label} for ${person.userName || person.userId}? They will not be able to clock in with it.`)) return;
+    try {
+      await deletePasskey(p.id, person.userId);
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    }
+  }
+
+  return (
+    <section className={`${CARD} mb-4 print:hidden`}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-medium">Phones registered by {person.userName || person.userId}</h3>
+        <button className={BTN} onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="mt-3">
+        <Banner msg={msg} />
+      </div>
+      {!items ? (
+        <p className="text-sm text-[#667085]">Loading...</p>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-[#667085]">No phones registered.</p>
+      ) : (
+        <ul className="divide-y divide-[#EEF1F0] text-sm">
+          {items.map((p) => (
+            <li key={p.id} className="flex items-center gap-3 py-2">
+              <span className="flex-1 font-medium">{p.label}</span>
+              <span className="text-xs text-[#667085]">
+                Added {fullDate(dayKey(p.createdAt))}
+                {p.lastUsedAt ? `, last used ${fullDate(dayKey(p.lastUsedAt))}` : ""}
+              </span>
+              <button className={`${BTN} px-3 py-1.5`} onClick={() => onRemove(p)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function TeamAttendance() {
   const [date, setDate] = useState(todayKey());
   const [q, setQ] = useState("");
@@ -849,6 +911,7 @@ function TeamAttendance() {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null); // a record to correct, or {} to add a new one
   const [history, setHistory] = useState(null);
+  const [phones, setPhones] = useState(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -943,6 +1006,7 @@ function TeamAttendance() {
         />
       )}
       {history && <PersonHistory person={history} onClose={() => setHistory(null)} />}
+      {phones && <PersonPhones person={phones} onClose={() => setPhones(null)} />}
 
       <div id="attendance-print" className="rounded-2xl border border-[#E6ECE9] bg-white">
         <PrintHeader title="Team attendance" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={fullDate(date)} />
@@ -1000,6 +1064,9 @@ function TeamAttendance() {
                       </button>{" "}
                       <button className={`${BTN} px-3 py-1.5`} onClick={() => setHistory(r)}>
                         History
+                      </button>{" "}
+                      <button className={`${BTN} px-3 py-1.5`} onClick={() => setPhones(r)}>
+                        Phones
                       </button>
                     </td>
                   </tr>

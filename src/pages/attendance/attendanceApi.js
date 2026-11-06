@@ -70,6 +70,17 @@ async function call(path, options = {}) {
   return data;
 }
 
+// Public calls (the /clock page): no sign-in, so no token is sent
+async function publicCall(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `Request failed (${res.status})`);
+  return data;
+}
+
 const query = (params = {}) => {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -128,6 +139,18 @@ export const getClockChallenge = () =>
 
 export const deletePasskey = (credentialId, userId) =>
   call(`/me/attendance/passkey/${encodeURIComponent(credentialId)}?${query({ userId })}`, { method: "DELETE" });
+
+/* ---------- Public clocking (no sign-in): used by the /clock page the QR code opens ---------- */
+
+// { canClock, reason, requireQr }
+export const getPublicInfo = () => publicCall("/public/attendance/info");
+
+export const getPublicChallenge = () =>
+  publicCall("/public/attendance/challenge", { method: "POST", body: JSON.stringify({}) });
+
+// Returns { action: "in" | "out", name, record }
+export const publicClock = (assertion, qrToken) =>
+  publicCall("/public/attendance/clock", { method: "POST", body: JSON.stringify({ assertion, qrToken }) });
 
 // Administrator (QR poster): { token, version }
 export const getQr = () => call("/me/attendance/qr");

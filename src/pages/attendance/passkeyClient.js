@@ -1,5 +1,5 @@
 // Browser side of passkey clocking (talks to the phone's fingerprint / face / PIN prompt).
-import { getRegisterOptions, registerPasskey, getClockChallenge } from "./attendanceApi";
+import { getRegisterOptions, registerPasskey, getClockChallenge, getPublicChallenge } from "./attendanceApi";
 
 const toBuf = (s) => {
   const b64 = String(s).replace(/-/g, "+").replace(/_/g, "/");
@@ -86,5 +86,31 @@ export async function getAssertion() {
     clientDataJSON: toB64u(r.clientDataJSON),
     authenticatorData: toB64u(r.authenticatorData),
     signature: toB64u(r.signature),
+  };
+}
+
+// Clocking from the public /clock page: the phone picks the passkey itself, so nobody has to sign in.
+export async function getPublicAssertion() {
+  const opts = await getPublicChallenge();
+  let cred;
+  try {
+    cred = await navigator.credentials.get({
+      publicKey: {
+        challenge: toBuf(opts.challenge),
+        rpId: opts.rpId,
+        userVerification: "required",
+        timeout: opts.timeout,
+      },
+    });
+  } catch (e) {
+    throw friendly(e);
+  }
+  const r = cred.response;
+  return {
+    credentialId: cred.id,
+    clientDataJSON: toB64u(r.clientDataJSON),
+    authenticatorData: toB64u(r.authenticatorData),
+    signature: toB64u(r.signature),
+    userHandle: r.userHandle ? toB64u(r.userHandle) : "",
   };
 }
