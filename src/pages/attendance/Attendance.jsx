@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Fingerprint, Download, Trash2, Printer } from "lucide-react";
+import { Fingerprint, Download, Trash2, Printer, Wifi, ScanLine } from "lucide-react";
 import QRCode from "qrcode";
 import { getAccess } from "../../access";
 import { WEEKEND_DAYS, holidayName } from "../../holidays";
@@ -423,6 +423,109 @@ function PasskeyCard({ today, onChange }) {
 
 /* ---------- QR poster (administrator): print it and stick it up at the office ---------- */
 
+// To use your own logo: save it in the portal's public folder (for example public/logo.png) and set this to "/logo.png".
+// Leave it empty to use the green "E" mark from the login page.
+const LOGO_SRC = "/logo.png";
+const BRAND_FONT = '"Fraunces", Georgia, serif';
+
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+const loadImage = (src) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+
+// A QR code with the logo in the middle. "H" error correction lets the scanner ignore the covered centre.
+async function makeQrImage(url) {
+  const canvas = document.createElement("canvas");
+  await QRCode.toCanvas(canvas, url, {
+    width: 900,
+    margin: 0,
+    errorCorrectionLevel: "H",
+    color: { dark: "#0B2B24", light: "#FFFFFF" },
+  });
+  const ctx = canvas.getContext("2d");
+  const size = canvas.width;
+  const box = Math.round(size * 0.19);
+  const x = Math.round((size - box) / 2);
+  const pad = 16;
+
+  ctx.fillStyle = "#FFFFFF";
+  roundedRect(ctx, x - pad, x - pad, box + pad * 2, box + pad * 2, 30);
+  ctx.fill();
+
+  const logo = LOGO_SRC ? await loadImage(LOGO_SRC) : null;
+  if (logo) {
+    const scale = Math.min(box / logo.width, box / logo.height);
+    const w = logo.width * scale;
+    const h = logo.height * scale;
+    ctx.drawImage(logo, x + (box - w) / 2, x + (box - h) / 2, w, h);
+  } else {
+    ctx.fillStyle = "#008060";
+    roundedRect(ctx, x, x, box, box, 24);
+    ctx.fill();
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = `600 ${Math.round(box * 0.7)}px ${BRAND_FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("E", size / 2, size / 2 + box * 0.04);
+  }
+  return canvas.toDataURL("image/png");
+}
+
+// The poster is drawn on an A4 sheet (794 x 1123 px = 210 x 297 mm). On screen it is shown smaller; printing uses the full size.
+const POSTER_CSS = `
+.poster-frame { position: relative; width: 556px; height: 786px; margin: 0 auto; overflow: hidden; border-radius: 14px; box-shadow: 0 8px 30px rgba(11,43,36,.15); background: #fff; }
+.poster-sheet { width: 794px; height: 1123px; transform: scale(0.7); transform-origin: top left; display: flex; flex-direction: column; background: #fff; color: #0B2B24; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  #attendance-print { width: 210mm !important; height: 297mm !important; overflow: hidden !important; border-radius: 0 !important; box-shadow: none !important; }
+  #attendance-print .poster-sheet { transform: none !important; }
+  #attendance-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+`;
+
+function PosterLogo({ size = 76 }) {
+  return (
+    <div
+      style={{ width: size, height: size, borderRadius: size * 0.26 }}
+      className="flex items-center justify-center overflow-hidden bg-white shadow-md"
+    >
+      {LOGO_SRC ? (
+        <img src={LOGO_SRC} alt="EACHRights" style={{ width: "80%", height: "80%", objectFit: "contain" }} />
+      ) : (
+        <span style={{ fontFamily: BRAND_FONT, fontSize: size * 0.62, fontWeight: 600, color: "#008060", lineHeight: 1 }}>E</span>
+      )}
+    </div>
+  );
+}
+
+function PosterStep({ icon: Icon, title, text: caption }) {
+  return (
+    <div style={{ flex: 1, textAlign: "center" }}>
+      <div
+        style={{ width: 70, height: 70, borderRadius: 35, background: "#E3F3EC", color: "#00664E", margin: "0 auto" }}
+        className="flex items-center justify-center"
+      >
+        <Icon size={32} />
+      </div>
+      <p style={{ marginTop: 12, fontSize: 18, fontWeight: 700 }}>{title}</p>
+      <p style={{ marginTop: 3, fontSize: 14, color: "#667085" }}>{caption}</p>
+    </div>
+  );
+}
+
 function QrScreen() {
   const [token, setToken] = useState(null);
   const [img, setImg] = useState("");
@@ -441,10 +544,14 @@ function QrScreen() {
 
   useEffect(() => {
     if (!token) return;
+    let on = true;
     const url = `${window.location.origin}/clock?clock=${encodeURIComponent(token)}`;
-    QRCode.toDataURL(url, { width: 640, margin: 2 })
-      .then(setImg)
-      .catch(() => setMsg({ ok: false, text: "Could not draw the QR code." }));
+    makeQrImage(url)
+      .then((data) => on && setImg(data))
+      .catch(() => on && setMsg({ ok: false, text: "Could not draw the QR code." }));
+    return () => {
+      on = false;
+    };
   }, [token]);
 
   async function onRotate() {
@@ -464,12 +571,16 @@ function QrScreen() {
 
   return (
     <>
+      <style>{POSTER_CSS}</style>
+
       <section className={`${CARD} mb-6 print:hidden`}>
         <h3 className="font-medium">QR poster</h3>
         <p className="mt-1 text-sm text-[#667085]">
-          Print this poster and put it up at the office. Staff scan it with their phone camera, which opens a clock page, then
-          tap the button and confirm with their fingerprint, face or PIN. No password is needed. It only works while they are on the office network, so scanning it from home or on mobile data
-          won't let anyone clock in. If a photo of the poster is ever shared around, make a new code.
+          Print this A4 poster and put it up at the office. Staff scan it with their phone camera, which opens a clock page,
+          then tap the button and confirm with their fingerprint, face or PIN. No password is needed. It only works while
+          they are on the office network, so scanning it from home or on mobile data won't let anyone clock in. If a photo
+          of the poster is ever shared around, make a new code. In the print window, choose A4, margins None, and turn on
+          background graphics so the colours print.
         </p>
         <div className="mt-3">
           <Banner msg={msg} />
@@ -484,23 +595,97 @@ function QrScreen() {
         </div>
       </section>
 
-      <section id="attendance-print" className="rounded-2xl border border-[#E6ECE9] bg-white p-8 text-center">
-        <h2 className="text-3xl font-semibold">Clock in and out</h2>
-        <p className="mt-1 text-base text-[#475467]">EACHRights staff attendance</p>
-        <div className="flex justify-center py-6">
-          {img ? (
-            <img src={img} alt="QR code for clocking in" className="h-80 w-80" />
-          ) : (
-            !msg && <p className="text-sm text-[#667085]">Loading...</p>
-          )}
+      <div className="overflow-x-auto pb-4">
+        <div id="attendance-print" className="poster-frame">
+          <div className="poster-sheet">
+            {/* Header */}
+            <div
+              style={{
+                position: "relative",
+                overflow: "hidden",
+                height: 250,
+                padding: "46px 64px 0",
+                color: "#fff",
+                background: "linear-gradient(135deg, #008060 0%, #00664E 100%)",
+                borderRadius: "0 0 56px 56px",
+              }}
+            >
+              <div style={{ position: "absolute", right: -90, top: -130, width: 380, height: 380, borderRadius: 190, background: "rgba(255,255,255,0.08)" }} />
+              <div style={{ position: "absolute", right: 120, bottom: -150, width: 260, height: 260, borderRadius: 130, background: "rgba(255,255,255,0.06)" }} />
+              <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 20 }}>
+                <PosterLogo />
+                <div>
+                  <p style={{ fontFamily: BRAND_FONT, fontSize: 44, fontWeight: 600, lineHeight: 1.05 }}>EACHRights</p>
+                  <p style={{ marginTop: 6, fontSize: 14, letterSpacing: 4, textTransform: "uppercase", opacity: 0.85 }}>Staff attendance</p>
+                </div>
+              </div>
+              <p style={{ position: "relative", marginTop: 34, fontSize: 18, opacity: 0.92 }}>
+                Advancing Rights. Strengthening Systems. Transforming Lives.
+              </p>
+            </div>
+
+            {/* Headline */}
+            <div style={{ marginTop: 38, textAlign: "center" }}>
+              <p style={{ fontFamily: BRAND_FONT, fontSize: 60, fontWeight: 600, lineHeight: 1.05 }}>Clock in &amp; out</p>
+              <p style={{ marginTop: 8, fontSize: 22, color: "#475467" }}>Scan with your phone camera</p>
+            </div>
+
+            {/* QR */}
+            <div
+              style={{
+                position: "relative",
+                width: 400,
+                margin: "34px auto 0",
+                padding: 26,
+                background: "#fff",
+                border: "4px solid #008060",
+                borderRadius: 36,
+                boxShadow: "0 18px 40px rgba(0,128,96,0.18)",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: -19,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  padding: "6px 24px",
+                  borderRadius: 999,
+                  background: "#008060",
+                  color: "#fff",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  letterSpacing: 3,
+                }}
+              >
+                SCAN ME
+              </span>
+              {img ? (
+                <img src={img} alt="QR code for clocking in" style={{ display: "block", width: 340, height: 340 }} />
+              ) : (
+                <div style={{ width: 340, height: 340 }} className="flex items-center justify-center text-sm text-[#667085]">
+                  {msg ? "" : "Loading..."}
+                </div>
+              )}
+            </div>
+
+            {/* Steps */}
+            <div style={{ display: "flex", gap: 16, padding: "38px 56px 0" }}>
+              <PosterStep icon={Wifi} title="Connect" text="To the office Wi-Fi" />
+              <PosterStep icon={ScanLine} title="Scan" text="This code with your camera" />
+              <PosterStep icon={Fingerprint} title="Confirm" text="Fingerprint, face or PIN" />
+            </div>
+
+            {/* Footer */}
+            <div style={{ marginTop: "auto", padding: "22px 64px 26px", textAlign: "center", background: "#EEF7F3" }}>
+              <p style={{ fontSize: 15, fontWeight: 600, color: "#00664E" }}>Works on the office network only</p>
+              <p style={{ marginTop: 4, fontSize: 13, color: "#475467" }}>
+                First time? Sign in to the staff portal once and register your phone under Attendance, My phone.
+              </p>
+            </div>
+          </div>
         </div>
-        <ol className="mx-auto max-w-md space-y-1 text-left text-base">
-          <li>1. Connect your phone to the office Wi-Fi.</li>
-          <li>2. Scan this code with your phone camera.</li>
-          <li>3. Tap the button and confirm with your fingerprint, face or PIN.</li>
-        </ol>
-        <p className="mt-4 text-sm text-[#667085]">Works on the office network only.</p>
-      </section>
+      </div>
     </>
   );
 }

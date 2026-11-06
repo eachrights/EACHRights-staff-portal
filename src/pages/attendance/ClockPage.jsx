@@ -133,6 +133,9 @@ export default function ClockPage() {
               <span className="text-sm font-medium">{busy ? "Please wait" : "Clock in / out"}</span>
             </button>
             <p className="mt-3 text-xs text-[#667085]">Your phone will ask for your fingerprint, face or PIN.</p>
+            <p className="mt-1 text-xs text-[#667085]">
+              Your first scan of the day is your clock in. Each later scan updates your clock out, so scan once more when you leave.
+            </p>
 
             {error && (
               <p role="alert" className="mt-4 rounded-xl bg-[#FDECEA] px-3 py-2 text-sm text-[#8A1C14]">
