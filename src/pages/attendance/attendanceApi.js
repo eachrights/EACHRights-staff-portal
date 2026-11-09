@@ -2,6 +2,7 @@
 // Matches the attendance route file (IP-allowlist version):
 //   /me/attendance/config, /holidays, /today, /clock, /records, /day, /import, /device/...
 // Leave uses the /me/leave/... routes from requestRoutes.mjs.
+// `call` and `query` are exported so ../remote/remoteApi.js can reuse them.
 
 const BASE = (
   import.meta.env.VITE_API_BASE_URL ||
@@ -30,7 +31,7 @@ const getToken = () => {
   return null;
 };
 
-async function call(path, options = {}) {
+export async function call(path, options = {}) {
   const token = getToken();
 
   const res = await fetch(`${BASE}${path}`, {
@@ -81,7 +82,7 @@ async function publicCall(path, options = {}) {
   return data;
 }
 
-const query = (params = {}) => {
+export const query = (params = {}) => {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") search.set(key, String(value));

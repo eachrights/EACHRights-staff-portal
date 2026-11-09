@@ -3,6 +3,7 @@ import { Fingerprint, Download, Trash2, Printer, Wifi, ScanLine } from "lucide-r
 import QRCode from "qrcode";
 import { getAccess } from "../../access";
 import { WEEKEND_DAYS, holidayName } from "../../holidays";
+import RemotePanel from "../remote/RemotePanel";
 import {
   getConfig,
   saveConfig,
@@ -121,6 +122,8 @@ const STATE_TAG = {
   weekend: { text: "Weekend", cls: "bg-[#F1F3F2] text-[#667085]" },
   holiday: { text: "Holiday", cls: "bg-[#EEF4FF] text-[#2E5AAC]" },
   leave: { text: "On leave", cls: "bg-[#FFF4E5] text-[#8A4B00]" },
+  away: { text: "Away on duty", cls: "bg-[#EEF4FF] text-[#2E5AAC]" },
+  remote: { text: "Remote", cls: "bg-[#E8F1FB] text-[#1F5FA8]" },
   upcoming: { text: "Upcoming", cls: "bg-[#F1F3F2] text-[#667085]" },
 };
 const LATE_CLS = "bg-[#FFF4E5] text-[#8A4B00]";
@@ -185,7 +188,7 @@ function RangeSelect({ value, onChange }) {
   );
 }
 
-// Tells the person when today is a holiday, a weekend or a leave day
+// Tells the person when today is a holiday, a weekend, a leave day, a trip or a remote day
 function DayNote({ day }) {
   if (!day) return null;
   const tag = STATE_TAG[day.state];
@@ -196,6 +199,10 @@ function DayNote({ day }) {
       ? "Today is a weekend."
       : day.state === "leave"
       ? "You are on approved leave today."
+      : day.state === "away"
+      ? `You are away on duty today${day.note ? `: ${day.note}` : ""}.`
+      : day.state === "remote"
+      ? "You are working remotely today."
       : "";
   if (!text) return null;
   return (
@@ -212,10 +219,12 @@ function SummaryCards({ summary }) {
     ["Late", summary.late, "text-[#8A4B00]"],
     ["Absent", summary.absent, "text-[#8A1C14]"],
     ["On leave", summary.leave, "text-[#8A4B00]"],
+    ["Away on duty", summary.away ?? 0, "text-[#2E5AAC]"],
+    ["Remote", summary.remote ?? 0, "text-[#1F5FA8]"],
     ["Hours worked", Math.round(summary.hours * 10) / 10, ""],
   ];
   return (
-    <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5 print:hidden">
+    <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7 print:hidden">
       {items.map(([label, value, cls]) => (
         <div key={label} className={CARD}>
           <p className="text-xs font-medium text-[#667085]">{label}</p>
@@ -254,7 +263,7 @@ function HistoryTable({ days }) {
               >
                 <td className="whitespace-nowrap px-3 py-2.5">{dayLabel(d.date)}</td>
                 <td className="px-3 py-2.5">
-                  <Chip text={d.state === "holiday" && d.note ? d.note : tag.text} cls={tag.cls} />
+                  <Chip text={(d.state === "holiday" || d.state === "away") && d.note ? d.note : tag.text} cls={tag.cls} />
                   {r?.late && (
                     <>
                       {" "}
@@ -2014,7 +2023,7 @@ function WhoIsOnLeave({ tick }) {
       : { text: "Upcoming", cls: "bg-[#EEF4FF] text-[#2E5AAC]" };
 
   return (
-    <section className={CARD}>
+    <section className={`${CARD} mb-6`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h3 className="font-medium">Who is on leave</h3>
@@ -2068,6 +2077,7 @@ function WhoIsOnLeave({ tick }) {
   );
 }
 
+// Leave first, then remote work (RemotePanel brings its own heading and sections)
 function LeavePanel({ canApprove }) {
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
@@ -2077,6 +2087,7 @@ function LeavePanel({ canApprove }) {
       <LeaveRequestForm onSent={refresh} />
       <MyLeaveRequests tick={tick} onChange={refresh} />
       <WhoIsOnLeave tick={tick} />
+      <RemotePanel canApprove={canApprove} />
     </>
   );
 }
