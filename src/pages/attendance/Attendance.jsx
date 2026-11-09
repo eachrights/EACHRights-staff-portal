@@ -1101,6 +1101,7 @@ function TeamAttendance() {
   const [date, setDate] = useState(todayKey());
   const [q, setQ] = useState("");
   const [records, setRecords] = useState([]);
+  const [off, setOff] = useState([]); // people on approved leave, a trip or remote work that day, with no clock record
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null); // a record to correct, or {} to add a new one
@@ -1116,6 +1117,7 @@ function TeamAttendance() {
         if (!on) return;
         setError("");
         setRecords(r.records || []);
+        setOff(r.off || []);
       })
       .catch((e) => on && setError(e.message))
       .finally(() => on && setLoading(false));
@@ -1151,6 +1153,21 @@ function TeamAttendance() {
           <p className="mt-1 text-2xl font-semibold text-[#00664E]">{stillIn}</p>
         </div>
       </div>
+
+      {off.length > 0 && (
+        <section className={`${CARD} mb-4 print:hidden`}>
+          <h3 className="font-medium">Away on {fullDate(date)}</h3>
+          <ul className="mt-3 divide-y divide-[#EEF1F0] text-sm">
+            {off.map((p) => (
+              <li key={`${p.userId}|${p.state}`} className="flex items-center gap-3 py-2">
+                <span className="flex-1 font-medium">{p.userName || p.userId}</span>
+                {p.note && <span className="capitalize text-[#667085]">{p.note}</span>}
+                <Chip text={STATE_TAG[p.state]?.text || p.state} cls={STATE_TAG[p.state]?.cls || STATE_TAG.away.cls} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2 print:hidden">
         <input
