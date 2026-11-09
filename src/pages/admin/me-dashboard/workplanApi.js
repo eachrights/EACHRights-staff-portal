@@ -4,6 +4,8 @@
 //   /me/events     GET { events, holidays, leave, activities }, POST create, PUT /{id} update, DELETE /{id}
 //   /me/audit      GET ?month=YYYY-MM&entity&limit (administrator) -> { entries }
 
+import { eventToApi, eventFromApi } from "./eventMapping";
+
 // VITE_API_URL comes first because this was the address the workplan used before.
 // If it is not set, the attendance API address is used.
 const BASE = (
@@ -261,13 +263,26 @@ export const deleteActivity = (id) =>
 
 /* ---------- Calendar events ---------- */
 
-export const listEvents = () => call("/me/events").then((d) => asList(d, "events"));
+const isoDay = (d) => d.toISOString().slice(0, 10);
+
+// The API returns only about three months by default, so ask for a wide window
+export const listEvents = () => {
+  const now = new Date();
+  const p = new URLSearchParams({
+    from: isoDay(new Date(Date.UTC(now.getUTCFullYear() - 1, 0, 1))),
+    to: isoDay(new Date(Date.UTC(now.getUTCFullYear() + 2, 0, 1))),
+  });
+  return call(`/me/events?${p}`).then((d) => asList(d, "events").map(eventFromApi));
+};
 
 // An event with an id is updated (PUT); one without is created (POST).
-export const saveEvent = (e) =>
-  e?.id
-    ? call(`/me/events/${encodeURIComponent(e.id)}`, { method: "PUT", body: JSON.stringify(e) })
-    : call("/me/events", { method: "POST", body: JSON.stringify(e) });
+// The calendar's shape is translated to the API's shape in eventMapping.js.
+export const saveEvent = (e) => {
+  const body = JSON.stringify(eventToApi(e));
+  return e?.id
+    ? call(`/me/events/${encodeURIComponent(e.id)}`, { method: "PUT", body })
+    : call("/me/events", { method: "POST", body });
+};
 
 export const deleteEvent = (id) =>
   call(`/me/events/${encodeURIComponent(id)}`, { method: "DELETE" });
