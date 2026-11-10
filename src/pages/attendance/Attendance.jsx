@@ -30,7 +30,6 @@ import {
   clock,
   getRecords,
   getDay,
-  getReport,
   correctRecord,
   importPunches,
   getPasskeys,
@@ -51,7 +50,7 @@ import {
   prepareAssertion,
 } from "./passkeyClient";
 import ResetProject from "./ResetProject";
-import { SummaryCards, StatTile, ReportCharts, filterDays, METRICS } from "./attendanceStats";
+import { SummaryCards, StatTile, filterDays, METRICS } from "./attendanceStats";
 
 /* =====================================================================
    Helpers: time, dates, text
@@ -62,6 +61,7 @@ const TZ = "Africa/Nairobi";
 const DAY_MS = 86400000;
 const BRAND_FONT = '"Fraunces", Georgia, serif';
 const REFRESH_MS = 60000;
+const COMPANY = "EACHRights";
 
 // True when the portal is open in a phone's own browser
 const onPhone = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -215,7 +215,8 @@ function usePrepare(fn, enabled) {
 
 /* =====================================================================
    Design tokens (Tailwind classes)
-   ink #0B2B24 | green #008060 / #00664E | canvas #F6F8F7 | line #E3E8E5 | muted #667085
+   Staff-sheet look: green title and column bars, dotted row lines, white sheets.
+   green #008060 / #00664E | ink #0B2B24 | canvas #F6F8F7 | line #E3E8E5 | muted #667085
    ===================================================================== */
 
 const FOCUS =
@@ -227,9 +228,10 @@ const BTN_SM_PRIMARY = `inline-flex h-8 items-center justify-center gap-1.5 whit
 const INPUT = `h-9 rounded-lg border border-[#D5DBD8] bg-white px-3 text-sm text-[#0B2B24] placeholder:text-[#98A2B3] transition hover:border-[#B8C2BD] motion-reduce:transition-none ${FOCUS}`;
 const CARD = "rounded-xl border border-[#E3E8E5] bg-white p-5 shadow-[0_1px_2px_rgba(11,43,36,0.04)]";
 const SURFACE = "rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]";
-const TH = "whitespace-nowrap px-4 py-2.5 text-left text-xs font-medium text-[#667085]";
+const THEAD = "bg-[#008060] text-white";
+const TH = "whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold text-white";
 const TD = "px-4 py-3";
-const ROW = "border-b border-[#EEF1F0] transition-colors last:border-0 hover:bg-[#FAFBFA] motion-reduce:transition-none";
+const ROW = "border-b border-dotted border-[#008060]/50 transition-colors last:border-0 hover:bg-[#FAFBFA] motion-reduce:transition-none";
 const NUM = `${TD} text-right tabular-nums`;
 const NUM_HEAD = `${TH} text-right`;
 const TOOLBAR = `mb-4 flex flex-wrap items-center gap-2 p-3 print:hidden ${SURFACE}`;
@@ -257,6 +259,7 @@ const PRINT_CSS = `
   #attendance-print, #attendance-print * { visibility: visible !important; }
   #attendance-print tr { break-inside: avoid; }
   #attendance-print thead { display: table-header-group; }
+  #attendance-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #attendance-print {
     position: absolute !important;
     left: 0;
@@ -292,7 +295,7 @@ function Banner({ msg }) {
       role={msg.ok ? "status" : "alert"}
       className={`mb-4 rounded-lg border-l-4 px-3.5 py-2.5 text-sm ${
         msg.ok
-          ? "border-[#008060] bg-[#E8F5EF] text-[#00553F]"
+          ? "border-[#008060] bg-[#E8F5EF] text-[#00664E]"
           : "border-[#D92D20] bg-[#FEF3F2] text-[#8A1C14]"
       }`}
     >
@@ -350,7 +353,7 @@ function Loading({ text = "Loading..." }) {
 function Empty({ icon: Icon = CalendarDays, title, hint }) {
   return (
     <div className="flex flex-col items-center px-4 py-12 text-center">
-      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F1F5F3] text-[#667085]">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#EEF7F3] text-[#667085]">
         <Icon size={20} />
       </span>
       <p className="mt-3 text-sm font-medium">{title}</p>
@@ -359,14 +362,14 @@ function Empty({ icon: Icon = CalendarDays, title, hint }) {
   );
 }
 
-// A titled block: heading and short description on the left, actions on the right
+// A titled block: blue heading strip with a short description, actions on the right
 function Panel({ title, description, actions, children, className = "", id, flush = false }) {
   return (
-    <section id={id} className={`mb-6 ${SURFACE} ${className}`}>
+    <section id={id} className={`mb-6 overflow-hidden ${SURFACE} ${className}`}>
       {(title || actions) && (
-        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#E3E8E5] border-t-4 border-t-[#008060] px-5 py-4 print:hidden">
           <div className="min-w-0">
-            {title && <h3 className="text-base font-semibold">{title}</h3>}
+            {title && <h3 className="text-base font-semibold text-[#00664E]">{title}</h3>}
             {description && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[#667085]">{description}</p>}
           </div>
           {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -379,7 +382,7 @@ function Panel({ title, description, actions, children, className = "", id, flus
 
 function Field({ label, children, className = "" }) {
   return (
-    <label className={`block text-xs font-medium text-[#475467] ${className}`}>
+    <label className={`block text-xs font-medium text-[#008060] ${className}`}>
       <span>{label}</span>
       {children}
     </label>
@@ -425,14 +428,14 @@ function SearchBox({ value, onChange }) {
 }
 
 // Download CSV and Print buttons shared by every list
-function ExportButtons({ onCsv, disabled }) {
+function ExportButtons({ onCsv, onPrint = () => window.print(), disabled, preparing = false }) {
   return (
     <>
       <button className={BTN} onClick={onCsv} disabled={disabled}>
         <Download size={16} /> Download CSV
       </button>
-      <button className={BTN} onClick={() => window.print()} disabled={disabled}>
-        <Printer size={16} /> Print
+      <button className={BTN} onClick={onPrint} disabled={disabled || preparing}>
+        <Printer size={16} /> {preparing ? "Preparing..." : "Print"}
       </button>
     </>
   );
@@ -541,7 +544,7 @@ function HistoryTable({ days }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] border-collapse text-sm">
-        <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+        <thead className={THEAD}>
           <tr>
             <th className={TH}>Date</th>
             <th className={TH}>Status</th>
@@ -706,7 +709,7 @@ function PasskeyCard({ today, onChange }) {
     >
       <Banner msg={msg} />
       {items && items.length > 0 ? (
-        <ul className="divide-y divide-[#EEF1F0] text-sm">
+        <ul className="divide-y divide-dotted divide-[#008060]/40 text-sm">
           {items.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0 last:pb-0">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#E3F3EC] text-[#00664E]">
@@ -737,7 +740,7 @@ function PasskeyCard({ today, onChange }) {
    ===================================================================== */
 
 // To use your own logo: save it in the portal's public folder (for example public/logo.png) and set this to "/logo.png".
-// Leave it empty to use the green "E" mark from the login page.
+// Leave it empty to use the "E" mark from the login page.
 const LOGO_SRC = "/logo.png";
 
 function roundedRect(ctx, x, y, w, h, r) {
@@ -1174,8 +1177,8 @@ function MyAttendance() {
         </section>
 
         {/* TODAY */}
-        <section className={CARD} aria-label="Today">
-          <h3 className="text-sm font-medium text-[#667085]">Hours today</h3>
+        <section className={`${CARD} border-t-4 border-t-[#008060]`} aria-label="Today">
+          <h3 className="text-sm font-semibold text-[#008060]">Hours today</h3>
           <p className="mt-1 text-3xl font-semibold tabular-nums">{hoursText(workedToday)}</p>
           {pct !== null && (
             <div className="mt-3">
@@ -1192,7 +1195,7 @@ function MyAttendance() {
               <p className="mt-1.5 text-xs text-[#667085]">{pct}% of the working day</p>
             </div>
           )}
-          <ul className="mt-4 space-y-2.5 border-t border-[#EEF1F0] pt-4 text-sm">
+          <ul className="mt-4 space-y-2.5 border-t border-dotted border-[#008060]/50 pt-4 text-sm">
             {!rec?.in && !rec?.out && <li className="text-[#667085]">No clock in yet.</li>}
             {rec?.in && (
               <li className="flex items-center gap-2.5">
@@ -1226,10 +1229,10 @@ function MyAttendance() {
       <SummaryCards summary={data?.summary} active={cardKey} onSelect={setCardKey} />
 
       {/* HISTORY */}
-      <section id="attendance-print" className={`mb-6 ${SURFACE}`}>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+      <section id="attendance-print" className={`mb-6 overflow-hidden ${SURFACE}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E3E8E5] border-t-4 border-t-[#008060] px-5 py-4 print:hidden">
           <div>
-            <h3 className="text-base font-semibold">My history</h3>
+            <h3 className="text-base font-semibold text-[#00664E]">My history</h3>
             <p className="mt-0.5 text-sm text-[#667085]">
               {cardKey ? (
                 <>
@@ -1424,7 +1427,7 @@ function PersonPhones({ person, onClose }) {
       ) : items.length === 0 ? (
         <p className="text-sm text-[#667085]">No phones registered.</p>
       ) : (
-        <ul className="divide-y divide-[#EEF1F0] text-sm">
+        <ul className="divide-y divide-dotted divide-[#008060]/40 text-sm">
           {items.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0 last:pb-0">
               <span className="flex-1 font-medium">{p.label}</span>
@@ -1584,7 +1587,7 @@ function TeamAttendance() {
             {filtered.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] border-collapse text-sm">
-                  <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+                  <thead className={THEAD}>
                     <tr>
                       <th className={TH}>Name</th>
                       <th className={TH}>Clock in</th>
@@ -1636,9 +1639,9 @@ function TeamAttendance() {
             )}
             {others.length > 0 && (
               <div className={`overflow-x-auto print:break-inside-avoid ${filtered.length > 0 ? "border-t border-[#E3E8E5]" : ""}`}>
-                <h3 className="bg-[#F9FAFA] px-5 py-3 text-sm font-semibold">Not clocked in on {fullDate(date)}</h3>
+                <h3 className="bg-[#F9FAFA] px-5 py-3 text-sm font-semibold text-[#00664E]">Not clocked in on {fullDate(date)}</h3>
                 <table className="w-full min-w-[640px] border-collapse text-sm">
-                  <thead className="border-y border-[#E3E8E5]">
+                  <thead className={THEAD}>
                     <tr>
                       <th className={TH}>Name</th>
                       <th className={TH}>Status</th>
@@ -1660,7 +1663,7 @@ function TeamAttendance() {
                   </tbody>
                 </table>
                 {absent.length > 0 && (
-                  <p className="border-t border-[#EEF1F0] px-5 py-3 text-xs text-[#667085]">
+                  <p className="border-t border-dotted border-[#008060]/50 px-5 py-3 text-xs text-[#667085]">
                     Absent means someone who clocked in during the last 30 days and has no clock record, leave, trip or
                     remote day on this date.
                   </p>
@@ -1675,176 +1678,319 @@ function TeamAttendance() {
 }
 
 /* =====================================================================
-   Team report (administrator): one line per person for a month or a year
+   Report (administrator): the printed staff attendance sheet, Monday to Friday
+   ID | Name | Mon..Fri | Total A / P / L, one week at a time. Built from getDay(), one call per day.
+   Only people with attendance in the week are listed. Remote and away-on-duty days count as Present, leave counts as L.
    ===================================================================== */
 
-const ZERO_TOTALS = { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 };
-const sumPeople = (list) =>
-  list.reduce(
-    (t, p) => ({
-      present: t.present + p.present,
-      late: t.late + p.late,
-      absent: t.absent + p.absent,
-      leave: t.leave + p.leave,
-      away: t.away + p.away,
-      remote: t.remote + p.remote,
-      hours: t.hours + p.hours,
-    }),
-    ZERO_TOTALS
-  );
+const SHEET_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const GREEN = "#008060";
+const GREEN_DARK = "#00664E";
+const SHEET_CODE = { leave: "L", away: "P", remote: "P", absent: "A" };
+const SHEET_CODE_STYLE = {
+  P: { color: GREEN_DARK, fontWeight: 600 },
+  A: { color: "#B42318", fontWeight: 700 },
+  L: { color: "#B54708", fontWeight: 700 },
+};
+const SHEET_TOTALS = ["A", "P", "L"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const YEAR_MIN = 2026;
+const YEAR_MAX = 2060;
+const weekStartOf = (k) => addDays(k, -((weekday(k) + 6) % 7)); // Monday
 
-function TeamReport() {
-  const [period, setPeriod] = useState("month");
-  const [q, setQ] = useState("");
-  const [metric, setMetric] = useState(null); // a clicked card: present | late | absent | leave | away | remote | hours
+const SHEET_CSS = `
+.ws-table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ws-table th, .ws-table td { padding: 9px 8px; text-align: center; }
+.ws-table thead th { background: ${GREEN}; color: #fff; font-weight: 600; letter-spacing: .02em; border-left: 1px solid rgba(255,255,255,.28); }
+.ws-table thead th:first-child { border-left: 0; }
+.ws-table thead th.ws-sep { border-left: 2px solid #fff; }
+.ws-table tbody td { border-bottom: 1px dotted ${GREEN}; border-left: 1px dotted rgba(0,128,96,.55); }
+.ws-table tbody tr:nth-child(even) td { background: #F7FAF9; }
+.ws-table tbody td:first-child, .ws-table tbody td.ws-name { border-left: 0; }
+.ws-table tbody td.ws-id { color: #667085; width: 44px; }
+.ws-table tbody td.ws-name { text-align: left; font-weight: 500; padding-left: 12px; }
+.ws-table tbody td.ws-sep { border-left: 2px solid ${GREEN}; }
+.ws-table tbody td.ws-none { color: #C0C8C4; }
+.ws-table tfoot td { background: #EEF7F3; border-top: 2px solid ${GREEN}; font-weight: 700; color: #0B2B24; }
+.ws-table tfoot td.ws-sep { border-left: 2px solid ${GREEN}; }
+.ws-table tfoot td.ws-name { text-align: left; padding-left: 12px; }
+.ws-month { font-size: 12px; }
+.ws-month th, .ws-month td { padding: 7px 3px; }
+.ws-month tbody td.ws-name, .ws-month tfoot td.ws-name { white-space: nowrap; min-width: 150px; }
+@media print {
+  @page { size: A4 portrait; margin: 8mm; }
+  #attendance-print .ws-table { font-size: 12px; }
+  #attendance-print .ws-month { font-size: 10px; }
+  #attendance-print .ws-table th, #attendance-print .ws-table td { padding: 5px 5px; }
+}
+`;
+
+function AttendanceReport() {
+  const [mode, setMode] = useState("week"); // "week" or "month"
+  const [anchor, setAnchor] = useState(todayKey());
+  const [month, setMonth] = useState(todayKey().slice(0, 7));
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const { from, to } = periodDays(period);
+
+  const isMonth = mode === "month";
+  const start = weekStartOf(anchor);
+  // Week: Monday to Friday. Month: every weekday of the month.
+  const dates = useMemo(() => {
+    if (!isMonth) return SHEET_DAYS.map((_, i) => addDays(start, i));
+    const out = [];
+    for (let k = `${month}-01`; k <= monthEnd(month); k = addDays(k, 1)) {
+      const w = weekday(k);
+      if (w >= 1 && w <= 5) out.push(k);
+    }
+    return out;
+  }, [isMonth, start, month]);
+  const dayName = (d) => SHEET_DAYS[weekday(d) - 1];
+  const lastDate = dates[dates.length - 1];
+  const periodText = isMonth
+    ? noon(`${month}-01`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
+    : `${fullDate(start)} to ${fullDate(lastDate)}`;
+  const shiftMonth = (n) => {
+    const [y, m] = month.split("-").map(Number);
+    setMonth(new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7));
+  };
 
   useEffect(() => {
     let on = true;
+    const today = todayKey();
     setData(null);
     setError("");
-    getReport({ from, to })
-      .then((r) => on && setData(r))
+    Promise.all(dates.map((d) => (d <= today ? getDay(d) : Promise.resolve(null))))
+      .then((days) => {
+        if (!on) return;
+        const people = new Map();
+        const touch = (p) => {
+          if (!people.has(p.userId)) people.set(p.userId, { userId: p.userId, name: p.userName || p.userId, cells: {} });
+          return people.get(p.userId);
+        };
+        days.forEach((r, i) => {
+          if (!r) return;
+          const d = dates[i];
+          (r.absent || []).forEach((p) => (touch(p).cells[d] = "A"));
+          (r.off || []).forEach((p) => (touch(p).cells[d] = SHEET_CODE[p.state] || "P"));
+          (r.records || []).forEach((p) => (touch(p).cells[d] = "P")); // a clock record always wins
+        });
+        const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
+        list.forEach((p) => {
+          p.t = { A: 0, P: 0, L: 0 };
+          Object.values(p.cells).forEach((c) => (p.t[c] += 1));
+        });
+        setData(list);
+      })
       .catch((e) => on && setError(e.message));
     return () => {
       on = false;
     };
-  }, [from, to]);
+  }, [dates]);
 
-  const needle = q.trim().toLowerCase();
-  const people = useMemo(() => (data?.people || []).filter((p) => matches(needle, p.userName, p.userId)), [data, needle]);
-
-  // With a card selected: only people who have that measure, highest first
-  const shown = useMemo(() => {
-    if (!metric) return people;
-    return people.filter((p) => (p[metric] || 0) > 0).sort((a, b) => (b[metric] || 0) - (a[metric] || 0));
-  }, [people, metric]);
-
-  const totals = useMemo(() => sumPeople(people), [people]); // the cards and the donut always cover everyone
-  const shownTotals = useMemo(() => sumPeople(shown), [shown]); // the table's total row follows the filter
-  const periodText = data ? dateRange(data.from, data.to) : "";
+  const rows = data || [];
+  const grand = rows.reduce(
+    (g, p) => ({ A: g.A + p.t.A, P: g.P + p.t.P, L: g.L + p.t.L }),
+    { A: 0, P: 0, L: 0 }
+  );
+  const perDay = dates.map((d) => rows.filter((p) => p.cells[d] === "P").length);
 
   function onCsv() {
     downloadCsv(
-      ["Name", "User ID", "Days present", "Late", "Absent", "On leave", "Away on duty", "Remote", "Hours worked"],
-      [
-        ...shown.map((p) => [p.userName, p.userId, p.present, p.late, p.absent, p.leave, p.away, p.remote, p.hours]),
-        [
-          "Total",
-          "",
-          shownTotals.present,
-          shownTotals.late,
-          shownTotals.absent,
-          shownTotals.leave,
-          shownTotals.away,
-          shownTotals.remote,
-          Math.round(shownTotals.hours * 100) / 100,
-        ],
-      ],
-      `attendance-report-${data.from}-to-${data.to}`
+      ["ID", "Name", ...dates.map((d) => `${dayName(d)} ${d}`), "Absent", "Present", "Leave"],
+      rows.map((p, i) => [i + 1, p.name, ...dates.map((d) => p.cells[d] || ""), p.t.A, p.t.P, p.t.L]),
+      isMonth ? `attendance-report-${month}` : `attendance-report-${start}`
     );
   }
 
+  const headBlock = { background: GREEN, color: "#fff" };
+
   return (
     <>
-      <ErrorBanner error={error} />
+      <style>{SHEET_CSS}</style>
+      {isMonth && <style>{"@media print { @page { size: A4 landscape; margin: 8mm; } }"}</style>}
 
       <div className={TOOLBAR}>
-        <PeriodSelect
-          value={period}
-          options={PERIOD_OPTIONS}
-          label="Period"
-          onChange={(v) => {
-            setPeriod(v);
-            setMetric(null);
-          }}
-        />
-        <SearchBox value={q} onChange={setQ} />
-        <span className="flex-1" />
-        <ExportButtons onCsv={onCsv} disabled={!shown.length} />
-      </div>
-
-      {data && people.length > 0 && <SummaryCards summary={totals} active={metric} onSelect={setMetric} />}
-
-      <div id="attendance-print" className={`mb-6 overflow-hidden ${SURFACE}`}>
-        <PrintHeader title="Attendance report" subtitle={needle ? `Filter: ${q.trim()}` : "All staff"} period={periodText} />
-        {!data && !error ? (
-          <Loading />
-        ) : !data ? null : people.length === 0 ? (
-          <Empty icon={Users} title="No attendance in this period" hint="Pick another month or year." />
+        <select className={INPUT} value={mode} onChange={(e) => setMode(e.target.value)} aria-label="Report period">
+          <option value="week">Weekly report</option>
+          <option value="month">Monthly report</option>
+        </select>
+        {isMonth ? (
+          <>
+            <button className={BTN} onClick={() => shiftMonth(-1)} disabled={month <= `${YEAR_MIN}-01`}>
+              Previous
+            </button>
+            <select
+              className={INPUT}
+              value={month.slice(5)}
+              onChange={(e) => setMonth(`${month.slice(0, 4)}-${e.target.value}`)}
+              aria-label="Month"
+            >
+              {MONTH_NAMES.map((name, i) => (
+                <option key={name} value={String(i + 1).padStart(2, "0")}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={INPUT}
+              value={month.slice(0, 4)}
+              onChange={(e) => setMonth(`${e.target.value}-${month.slice(5)}`)}
+              aria-label="Year"
+            >
+              {Array.from({ length: YEAR_MAX - YEAR_MIN + 1 }, (_, i) => YEAR_MIN + i).map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+            <button className={BTN} onClick={() => shiftMonth(1)} disabled={month >= `${YEAR_MAX}-12`}>
+              Next
+            </button>
+          </>
         ) : (
           <>
-            <div className={SUMMARY_BAR}>
-              <span className="font-semibold text-[#0B2B24]">{periodText}</span>
-              <span>Working days {data.workingDays}</span>
-              <span>{plural(shown.length, "person")}</span>
-              {metric && (
-                <span className="inline-flex items-center gap-2 print:hidden">
-                  Showing: <strong>{METRICS[metric].label}</strong>
-                  <button className={BTN_SM} onClick={() => setMetric(null)}>
-                    Clear
-                  </button>
-                </span>
-              )}
-            </div>
-
-            <ReportCharts people={shown} totals={totals} metric={metric} onMetric={setMetric} />
-
-            {shown.length === 0 ? (
-              <Empty icon={Users} title="Nobody matches this card" hint="Clear the filter to see everyone." />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] border-collapse text-sm">
-                  <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
-                    <tr>
-                      <th className={TH}>Name</th>
-                      <th className={NUM_HEAD}>Present</th>
-                      <th className={NUM_HEAD}>Late</th>
-                      <th className={NUM_HEAD}>Absent</th>
-                      <th className={NUM_HEAD}>On leave</th>
-                      <th className={NUM_HEAD}>Away on duty</th>
-                      <th className={NUM_HEAD}>Remote</th>
-                      <th className={NUM_HEAD}>Hours worked</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shown.map((p) => (
-                      <tr key={p.userId} className={ROW}>
-                        <td className={TD}>
-                          <PersonCell name={p.userName || p.userId} />
-                        </td>
-                        <td className={NUM}>{p.present}</td>
-                        <td className={NUM}>{p.late}</td>
-                        <td className={NUM}>{p.absent}</td>
-                        <td className={NUM}>{p.leave}</td>
-                        <td className={NUM}>{p.away}</td>
-                        <td className={NUM}>{p.remote}</td>
-                        <td className={`${NUM} font-medium`}>{hoursText(p.hours)}</td>
-                      </tr>
-                    ))}
-                    <tr className="border-t-2 border-[#E3E8E5] bg-[#F9FAFA] font-semibold">
-                      <td className={TD}>Total</td>
-                      <td className={NUM}>{shownTotals.present}</td>
-                      <td className={NUM}>{shownTotals.late}</td>
-                      <td className={NUM}>{shownTotals.absent}</td>
-                      <td className={NUM}>{shownTotals.leave}</td>
-                      <td className={NUM}>{shownTotals.away}</td>
-                      <td className={NUM}>{shownTotals.remote}</td>
-                      <td className={NUM}>{hoursText(shownTotals.hours)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <p className="border-t border-[#EEF1F0] px-5 py-3 text-xs text-[#667085]">
-              Counts are in days, working days only (weekdays that are not public holidays), up to today. Absent means a
-              working day with no clock record, leave, trip or remote day. A person is counted from the first day they
-              appear in the period.
-            </p>
+            <button className={BTN} onClick={() => setAnchor(addDays(start, -7))}>
+              Previous week
+            </button>
+            <input
+              type="date"
+              className={INPUT}
+              value={anchor}
+              max={todayKey()}
+              onChange={(e) => e.target.value && setAnchor(e.target.value)}
+              aria-label="Pick any date in the week"
+            />
+            <button className={BTN} onClick={() => setAnchor(addDays(start, 7))} disabled={addDays(start, 7) > todayKey()}>
+              Next week
+            </button>
           </>
         )}
+        <span className="flex-1" />
+        <ExportButtons onCsv={onCsv} disabled={!rows.length} />
+      </div>
+
+      <ErrorBanner error={error} />
+
+      <div id="attendance-print" className={`mb-6 overflow-x-auto ${SURFACE}`}>
+        <div style={{ minWidth: isMonth ? 1000 : 620 }}>
+          {/* Title bar */}
+          <div style={{ ...headBlock, textAlign: "center", padding: "18px 0 16px" }}>
+            <p style={{ fontFamily: BRAND_FONT, fontSize: 32, fontWeight: 600, lineHeight: 1.1 }}>Staff Attendance Sheet</p>
+            <p style={{ marginTop: 4, fontSize: 11, letterSpacing: 3, textTransform: "uppercase", opacity: 0.85 }}>{isMonth ? "Monthly report, working days" : "Weekly report, Monday to Friday"}</p>
+          </div>
+
+          {/* Company and week */}
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 20, padding: "20px 28px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              {LOGO_SRC && <img src={LOGO_SRC} alt={COMPANY} style={{ height: 60, width: "auto", objectFit: "contain" }} />}
+              <div>
+                <p style={{ color: GREEN_DARK, fontSize: 24, fontFamily: BRAND_FONT, fontWeight: 600, lineHeight: 1.1 }}>{COMPANY}</p>
+                <p style={{ marginTop: 3, fontSize: 12, color: "#667085" }}>Times and dates in Nairobi time</p>
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <p style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: GREEN, fontWeight: 700 }}>{isMonth ? "Month of" : "Week of"}</p>
+              <p style={{ marginTop: 2, fontSize: 16, fontWeight: 600, color: "#0B2B24" }}>
+                {periodText}
+              </p>
+              <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end", gap: 14, fontSize: 12, color: "#475467" }}>
+                {[
+                  ["A", "Absent"],
+                  ["P", "Present"],
+                  ["L", "Leave"],
+                ].map(([c, t]) => (
+                  <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ ...headBlock, width: 20, height: 20, borderRadius: 4, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600 }}>
+                      {c}
+                    </span>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {!data && !error ? (
+            <p style={{ padding: "48px 0", textAlign: "center", color: "#667085", fontSize: 14 }}>Loading...</p>
+          ) : rows.length === 0 ? (
+            <Empty icon={Users} title={`No attendance this ${isMonth ? "month" : "week"}`} hint={`Pick another ${isMonth ? "month" : "week"} to see who was in.`} />
+          ) : (
+            <table className={`ws-table ${isMonth ? "ws-month" : ""}`}>
+              <thead>
+                <tr>
+                  <th rowSpan={2} style={{ width: 48 }}>ID</th>
+                  <th rowSpan={2} style={{ textAlign: "left", paddingLeft: 12 }}>Name</th>
+                  {dates.map((d, i) => (
+                    <th key={d} rowSpan={2} className={i === 0 ? "ws-sep" : ""} style={isMonth ? undefined : { width: 64 }}>
+                      {isMonth ? d.slice(8) : dayName(d)}
+                      <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.85 }}>
+                        {isMonth ? dayName(d).slice(0, 2) : `${d.slice(8)}/${d.slice(5, 7)}`}
+                      </div>
+                    </th>
+                  ))}
+                  <th colSpan={3} className="ws-sep" style={{ borderBottom: "1px solid rgba(255,255,255,.45)" }}>
+                    Total
+                  </th>
+                </tr>
+                <tr>
+                  {SHEET_TOTALS.map((t, i) => (
+                    <th key={t} className={i === 0 ? "ws-sep" : ""} style={{ width: 44 }}>
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((p, i) => (
+                  <tr key={p.userId}>
+                    <td className="ws-id">{i + 1}</td>
+                    <td className="ws-name">{p.name}</td>
+                    {dates.map((d, j) => {
+                      const c = p.cells[d];
+                      const holiday = holidayName(d);
+                      return (
+                        <td
+                          key={d}
+                          className={`${j === 0 ? "ws-sep" : ""} ${c ? "" : "ws-none"}`}
+                          style={c ? SHEET_CODE_STYLE[c] : undefined}
+                          title={!c && holiday ? holiday : undefined}
+                        >
+                          {c || (holiday ? "H" : "–")}
+                        </td>
+                      );
+                    })}
+                    {SHEET_TOTALS.map((t, k) => (
+                      <td key={t} className={k === 0 ? "ws-sep" : ""} style={{ fontWeight: p.t[t] ? 600 : 400, color: p.t[t] ? undefined : "#C0C8C4" }}>
+                        {p.t[t]}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td />
+                  <td className="ws-name">Total present ({plural(rows.length, "person")})</td>
+                  {perDay.map((n, j) => (
+                    <td key={j} className={j === 0 ? "ws-sep" : ""}>
+                      {dates[j] <= todayKey() ? n : "–"}
+                    </td>
+                  ))}
+                  {SHEET_TOTALS.map((t, k) => (
+                    <td key={t} className={k === 0 ? "ws-sep" : ""}>
+                      {grand[t]}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            </table>
+          )}
+
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "12px 20px", fontSize: 11, color: "#667085", borderTop: "1px solid #E3E8E5" }}>
+            <span>A: working day with no clock record, leave, trip or remote day. P: includes remote and away on duty. L: approved leave. H: public holiday. A dash means no record yet.</span>
+            <span>Printed {fullDate(todayKey())}</span>
+          </div>
+        </div>
       </div>
     </>
   );
@@ -1915,7 +2061,7 @@ function ClockingSettings() {
         !msg && <p className="text-sm text-[#667085]">Loading...</p>
       ) : (
         <form onSubmit={onSave}>
-          <div className="divide-y divide-[#EEF1F0] border-y border-[#EEF1F0]">
+          <div className="divide-y divide-dotted divide-[#008060]/40 border-y border-dotted border-[#008060]/50">
             <Toggle
               checked={form.phoneClocking}
               onChange={flag("phoneClocking")}
@@ -1970,7 +2116,7 @@ function ClockingSettings() {
             </div>
           </div>
 
-          <div className="mt-6 flex justify-end border-t border-[#EEF1F0] pt-4">
+          <div className="mt-6 flex justify-end border-t border-dotted border-[#008060]/50 pt-4">
             <button className={BTN_PRIMARY} disabled={busy}>
               {busy ? "Saving..." : "Save settings"}
             </button>
@@ -2070,7 +2216,7 @@ function HolidaySettings() {
       ) : items.length === 0 ? (
         <p className="mt-4 text-sm text-[#667085]">No holidays added for {year}.</p>
       ) : (
-        <ul className="mt-3 divide-y divide-[#EEF1F0]">
+        <ul className="mt-3 divide-y divide-dotted divide-[#008060]/40">
           {items.map((h) => (
             <li key={h.date} className="flex items-center gap-3 py-2.5 text-sm">
               <span className="w-32 shrink-0 tabular-nums text-[#667085]">{fullDate(h.date)}</span>
@@ -2240,7 +2386,7 @@ function ImportFile() {
 
           <div className="mt-4 overflow-x-auto rounded-lg border border-[#E3E8E5]">
             <table className="w-full text-sm">
-              <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+              <thead className={THEAD}>
                 <tr>
                   <th className={TH}>User ID</th>
                   <th className={TH}>Date and time</th>
@@ -2267,7 +2413,7 @@ function ImportFile() {
             </table>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[#EEF1F0] pt-4">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-dotted border-[#008060]/50 pt-4">
             <p className="text-sm text-[#475467]">
               <span className="font-semibold text-[#0B2B24]">{punches.length}</span> punches ready
               {skipped > 0 ? `, ${skipped} rows can't be read and will be skipped` : ""}.
@@ -2413,7 +2559,7 @@ function MyLeaveRequests({ tick, onChange }) {
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] border-collapse text-sm">
-            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+            <thead className={THEAD}>
               <tr>
                 <th className={TH}>Type</th>
                 <th className={TH}>Dates</th>
@@ -2515,7 +2661,7 @@ function LeaveApprovals({ tick, onChange }) {
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] border-collapse text-sm">
-            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+            <thead className={THEAD}>
               <tr>
                 <th className={TH}>Name</th>
                 <th className={TH}>Type</th>
@@ -2615,7 +2761,7 @@ function WhoIsOnLeave({ tick }) {
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-sm">
-            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+            <thead className={THEAD}>
               <tr>
                 <th className={TH}>Name</th>
                 {showType && <th className={TH}>Type</th>}
@@ -2697,10 +2843,10 @@ function LeaveReport({ tick }) {
   }
 
   return (
-    <section id="attendance-print" className={`mb-6 ${SURFACE}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+    <section id="attendance-print" className={`mb-6 overflow-hidden ${SURFACE}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E3E8E5] border-t-4 border-t-[#008060] px-5 py-4 print:hidden">
         <div>
-          <h3 className="text-base font-semibold">Leave report</h3>
+          <h3 className="text-base font-semibold text-[#00664E]">Leave report</h3>
           <p className="mt-0.5 text-sm text-[#667085]">Approved leave in a month or a year. Weekends and public holidays are not counted.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -2722,10 +2868,10 @@ function LeaveReport({ tick }) {
             <span>{plural(totalDays, "leave day")}</span>
           </div>
 
-          <h4 className="px-5 pt-4 text-sm font-semibold">Days per person</h4>
+          <h4 className="px-5 pb-2 pt-4 text-sm font-semibold text-[#00664E]">Days per person</h4>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[420px] border-collapse text-sm">
-              <thead className="border-b border-[#E3E8E5]">
+              <thead className={THEAD}>
                 <tr>
                   <th className={TH}>Name</th>
                   <th className={NUM_HEAD}>Periods of leave</th>
@@ -2744,10 +2890,10 @@ function LeaveReport({ tick }) {
             </table>
           </div>
 
-          <h4 className="px-5 pt-5 text-sm font-semibold">All leave in the period</h4>
+          <h4 className="px-5 pb-2 pt-5 text-sm font-semibold text-[#00664E]">All leave in the period</h4>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] border-collapse text-sm">
-              <thead className="border-b border-[#E3E8E5]">
+              <thead className={THEAD}>
                 <tr>
                   <th className={TH}>Name</th>
                   {showType && <th className={TH}>Type</th>}
@@ -2773,6 +2919,143 @@ function LeaveReport({ tick }) {
   );
 }
 
+// Administrators and the CEO: cancel leave that is under way or still to come. A reason is required and is kept with the request.
+function ActiveLeaveAdmin({ tick, onChange }) {
+  const [items, setItems] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [target, setTarget] = useState(null); // the request being cancelled
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const today = todayKey();
+
+  useEffect(() => {
+    let on = true;
+    listLeaveRequests({ scope: "all", status: "approved" })
+      .then((r) => on && setItems(r))
+      .catch((e) => on && setMsg({ ok: false, text: e.message }));
+    return () => {
+      on = false;
+    };
+  }, [tick]);
+
+  const rows = (items || []).filter((r) => r.to >= today).sort((a, b) => a.from.localeCompare(b.from) || a.name.localeCompare(b.name));
+  const stateOf = (r) =>
+    r.from <= today
+      ? { text: "On leave now", cls: "bg-[#FFF4E5] text-[#8A4B00]" }
+      : { text: "Upcoming", cls: "bg-[#EEF4FF] text-[#2E5AAC]" };
+
+  function begin(r) {
+    setTarget(r);
+    setReason("");
+    setMsg(null);
+  }
+
+  async function onConfirm() {
+    if (!reason.trim()) {
+      setMsg({ ok: false, text: "Give a reason for cancelling this leave." });
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      await cancelLeave(target.id, { reason: reason.trim() });
+      setMsg({ ok: true, text: `${target.name}'s leave was cancelled.` });
+      setTarget(null);
+      setReason("");
+      onChange();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel
+      flush
+      title="Cancel active leave"
+      description="Stop approved leave that is under way or still to come. A reason is required, and the person will see it next to the cancelled request."
+    >
+      {msg && (
+        <div className="p-5 pb-0">
+          <Banner msg={msg} />
+        </div>
+      )}
+      {!items ? (
+        <Loading />
+      ) : rows.length === 0 ? (
+        <Empty title="No active leave" hint="Approved leave that is current or upcoming will appear here." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] border-collapse text-sm">
+            <thead className={THEAD}>
+              <tr>
+                <th className={TH}>Name</th>
+                <th className={TH}>Type</th>
+                <th className={TH}>Dates</th>
+                <th className={TH}>Status</th>
+                <th className={TH} />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className={`${ROW} ${target?.id === r.id ? "bg-[#FAFBFA]" : ""}`}>
+                  <td className={TD}>
+                    <PersonCell name={r.name} />
+                  </td>
+                  <td className={TD}>{r.type}</td>
+                  <td className={`${TD} whitespace-nowrap`}>{dateRange(r.from, r.to)}</td>
+                  <td className={TD}>
+                    <Chip {...stateOf(r)} />
+                  </td>
+                  <td className={`${TD} whitespace-nowrap text-right`}>
+                    <button className={BTN_SM} onClick={() => begin(r)} disabled={busy}>
+                      Cancel leave
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {target && (
+        <form
+          className="border-t border-[#E3E8E5] bg-[#F9FAFA] p-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onConfirm();
+          }}
+        >
+          <p className="text-sm font-medium">
+            Cancel {target.name}&apos;s {target.type.toLowerCase()} leave, {dateRange(target.from, target.to)}
+          </p>
+          <Field label="Reason (required)" className="mt-3">
+            <textarea
+              className={`${INPUT} mt-1.5 block h-auto w-full py-2`}
+              rows={3}
+              maxLength={300}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="For example: needed back at work for the audit"
+              autoFocus
+            />
+          </Field>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className={BTN_PRIMARY} disabled={busy || !reason.trim()}>
+              {busy ? "Cancelling..." : "Confirm cancellation"}
+            </button>
+            <button type="button" className={BTN} onClick={() => setTarget(null)} disabled={busy}>
+              Keep leave
+            </button>
+          </div>
+        </form>
+      )}
+    </Panel>
+  );
+}
+
 // Leave first, then remote work (RemotePanel brings its own heading and sections)
 function LeavePanel({ canApprove }) {
   const [tick, setTick] = useState(0);
@@ -2780,6 +3063,7 @@ function LeavePanel({ canApprove }) {
   return (
     <>
       {canApprove && <LeaveApprovals tick={tick} onChange={refresh} />}
+      {canApprove && <ActiveLeaveAdmin tick={tick} onChange={refresh} />}
       <LeaveRequestForm onSent={refresh} />
       <MyLeaveRequests tick={tick} onChange={refresh} />
       <WhoIsOnLeave tick={tick} />
@@ -2816,7 +3100,7 @@ export default function Attendance() {
     ["mine", "My attendance", Clock, false, <MyAttendance key="mine" />],
     ["leave", "Leave", CalendarDays, false, <LeavePanel key="leave" canApprove={canApprove} />],
     ["team", "Team", Users, true, <TeamAttendance key="team" />],
-    ["reports", "Reports", FileText, true, <TeamReport key="reports" />],
+    ["reports", "Reports", FileText, true, <AttendanceReport key="reports" />],
     ["settings", "Settings", Settings, true, <SettingsPanel key="settings" />],
     ["qr", "QR poster", QrCode, true, <QrScreen key="qr" />],
     ["scanner", "Scanner import", Upload, true, <ImportFile key="scanner" />],
@@ -2826,39 +3110,42 @@ export default function Attendance() {
   const current = tabs.find((t) => t[0] === tab) || tabs[0];
 
   return (
-    <div className="min-h-full bg-[#F6F8F7] p-4 text-[#0B2B24] lg:p-8">
+    <div className="min-h-full bg-[#F6F8F7] text-[#0B2B24]">
       <style>{PRINT_CSS}</style>
 
-      <div className="mx-auto max-w-[1200px]">
-        <div className="mb-6">
-          <h2 style={{ fontFamily: BRAND_FONT }} className="text-3xl font-semibold tracking-tight">
-            Attendance
-          </h2>
-          <p className="mt-1 text-sm text-[#667085]">
-            Clock in from the office network or at the office scanner. Times are in Nairobi time.
-          </p>
-        </div>
+      {/* Title bar, like the printed staff sheet */}
+      <header className="bg-[#008060] px-4 py-5 text-center text-white print:hidden lg:px-8">
+        <h2 style={{ fontFamily: BRAND_FONT }} className="text-3xl font-semibold tracking-tight sm:text-4xl">
+          Staff Attendance
+        </h2>
+        <p className="mt-1 text-sm text-white/85">
+          {COMPANY}. Clock in from the office network or at the office scanner. Times are in Nairobi time.
+        </p>
+      </header>
 
-        <div className="mb-6 flex overflow-x-auto border-b border-[#DDE3E0]" role="tablist">
-          {tabs.map(([key, label, Icon]) => (
-            <button
-              key={key}
-              role="tab"
-              aria-selected={current[0] === key}
-              onClick={() => setTab(key)}
-              className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors motion-reduce:transition-none ${FOCUS} ${
-                current[0] === key
-                  ? "border-[#008060] font-semibold text-[#00664E]"
-                  : "border-transparent font-medium text-[#667085] hover:border-[#C9D1CD] hover:text-[#0B2B24]"
-              }`}
-            >
-              <Icon size={16} />
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="p-4 lg:p-8">
+        <div className="mx-auto max-w-[1200px]">
+          <div className="mb-6 flex overflow-x-auto border-b border-[#D5DBD8]" role="tablist">
+            {tabs.map(([key, label, Icon]) => (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={current[0] === key}
+                onClick={() => setTab(key)}
+                className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors motion-reduce:transition-none ${FOCUS} ${
+                  current[0] === key
+                    ? "border-[#008060] font-semibold text-[#00664E]"
+                    : "border-transparent font-medium text-[#667085] hover:border-[#B8C2BD] hover:text-[#0B2B24]"
+                }`}
+              >
+                <Icon size={16} />
+                {label}
+              </button>
+            ))}
+          </div>
 
-        {current[4]}
+          {current[4]}
+        </div>
       </div>
     </div>
   );

@@ -226,14 +226,15 @@ const normalizeLeaveType = (value) => {
 };
 
 // Give API records the field names the Attendance page uses.
+// A cancelled request shows its cancellation reason (cancelReason) in the Note column, falling back to reviewNote.
 const toUiLeave = (r) => ({
   ...r,
   from: r.startDate,
   to: r.endDate,
   name: r.userName,
   type: r.type ? cap(r.type) : r.type,
-  decidedBy: r.reviewedBy,
-  decisionNote: r.reviewNote,
+  decidedBy: r.cancelledBy && r.status === "cancelled" ? r.cancelledBy : r.reviewedBy,
+  decisionNote: r.status === "cancelled" ? r.cancelReason || r.reviewNote : r.reviewNote,
 });
 
 // Approved leave. Accepts "active" | "current" | "upcoming" | "past" | "all",
@@ -271,9 +272,17 @@ export const requestLeave = (request = {}) => {
   });
 };
 
-// Cancel one of your own requests (pending, or approved and not yet started).
-export const cancelLeave = (id) =>
-  call(`/me/leave/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({}) });
+// Cancel leave. Staff cancel their own requests (pending, or approved and not yet started).
+// An administrator or the CEO can cancel anyone's approved leave, including leave already under way,
+// and must give a reason: cancelLeave(id, { reason }). The reason is sent as both `reason` and `note`
+// so the route can store it as cancelReason.
+export const cancelLeave = (id, { reason } = {}) => {
+  const text = String(reason ?? "").trim();
+  return call(`/me/leave/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify(text ? { reason: text, note: text } : {}),
+  });
+};
 
 // decision: "approve" | "approved" | "reject" | "rejected". The API needs a note when rejecting.
 export const decideLeave = (id, { decision, note } = {}) => {
