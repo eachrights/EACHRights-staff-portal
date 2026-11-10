@@ -1,6 +1,6 @@
 // API helpers for EACHRights staff attendance.
 // Matches the attendance route file (IP-allowlist version):
-//   /me/attendance/config, /holidays, /today, /clock, /records, /day, /import, /device/...
+//   /me/attendance/config, /holidays, /today, /clock, /records, /day, /report, /import, /device/...
 // Leave uses the /me/leave/... routes from requestRoutes.mjs.
 // `call` and `query` are exported so ../remote/remoteApi.js can reuse them.
 
@@ -166,8 +166,12 @@ export const rotateQr = () => call("/me/attendance/qr/rotate", { method: "POST",
 export const getRecords = ({ from, to, userId } = {}) =>
   call(`/me/attendance/records?${query({ from, to, userId })}`);
 
-// Administrator: everybody's records for one day. Returns { date, records }.
+// Administrator: everybody's records for one day. Returns { date, records, off, absent }.
 export const getDay = (date) => call(`/me/attendance/day?${query({ date })}`);
+
+// Administrator: one line per person for a period of up to a year (the monthly and yearly report).
+// Returns { from, to, workingDays, people: [{ userId, userName, present, late, absent, leave, away, remote, hours }], totals }.
+export const getReport = ({ from, to } = {}) => call(`/me/attendance/report?${query({ from, to })}`);
 
 // Administrator correction. body = { in: "HH:MM", out: "HH:MM", userName? }. An empty string clears that time.
 export const correctRecord = (userId, date, body) =>
@@ -234,11 +238,12 @@ const toUiLeave = (r) => ({
 
 // Approved leave. Accepts "active" | "current" | "upcoming" | "past" | "all",
 // or { from, to } (the page passes this) to limit the dates shown.
+// With { from, to } every approved leave is fetched and then cut to those dates, so any past or future
+// month or year works (the monthly and yearly leave report needs this).
 export async function listLeave(arg) {
   const range = arg && typeof arg === "object" ? arg : {};
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
   let when = typeof arg === "string" && LEAVE_WHEN.includes(arg) ? arg : "active";
-  if (range.to && range.to < today) when = "past";
+  if (range.from || range.to) when = "all";
 
   const result = await call(`/me/leave/on-leave?${query({ when })}`);
   return (result?.people || [])

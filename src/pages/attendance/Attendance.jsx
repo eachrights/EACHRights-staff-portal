@@ -1,5 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Fingerprint, Download, Trash2, Printer, Wifi, ScanLine } from "lucide-react";
+import {
+  Fingerprint,
+  Download,
+  Trash2,
+  Printer,
+  Wifi,
+  ScanLine,
+  Clock,
+  CalendarDays,
+  Users,
+  Settings,
+  QrCode,
+  Upload,
+  Plus,
+  Search,
+  FileText,
+} from "lucide-react";
 import QRCode from "qrcode";
 import { getAccess } from "../../access";
 import { WEEKEND_DAYS, holidayName } from "../../holidays";
@@ -14,6 +30,7 @@ import {
   clock,
   getRecords,
   getDay,
+  getReport,
   correctRecord,
   importPunches,
   getPasskeys,
@@ -32,6 +49,7 @@ import { passkeysSupported, registerThisDevice, getAssertion } from "./passkeyCl
 
 const TZ = "Africa/Nairobi";
 const DAY_MS = 86400000;
+const BRAND_FONT = '"Fraunces", Georgia, serif';
 
 // True when the portal is open in a phone's own browser
 const onPhone = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -85,13 +103,75 @@ const hoursText = (h) => {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 };
 
-// The API wants plain dates (YYYY-MM-DD) for from and to, not timestamps
+// "08:00" -> minutes since midnight (NaN when it can't be read)
+const toMinutes = (s) => {
+  const [h, m] = String(s || "").split(":").map(Number);
+  return h * 60 + m;
+};
+
+const initials = (name) =>
+  String(name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0].toUpperCase())
+    .join("");
+
+// The API wants plain dates (YYYY-MM-DD) for from and to, not timestamps.
+// Ranges end today at the latest, so the history never lists days that have not happened yet.
 function rangeDays(range) {
   const today = todayKey();
+  const year = Number(today.slice(0, 4));
+  const monthEnd = (ym) => {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  };
+  const cap = (to) => (to > today ? today : to);
+
   if (range === "month") return { from: `${today.slice(0, 7)}-01`, to: today };
+  if (range === "lastmonth") {
+    const prev = addDays(`${today.slice(0, 7)}-01`, -1);
+    return { from: `${prev.slice(0, 7)}-01`, to: prev };
+  }
   if (range === "30d") return { from: addDays(today, -29), to: today };
+  if (range === "year") return { from: `${year}-01-01`, to: today };
+  if (range === "lastyear") return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
+  if (range.startsWith("m:")) {
+    const ym = range.slice(2);
+    return { from: `${ym}-01`, to: cap(monthEnd(ym)) };
+  }
+  if (range.startsWith("y:")) {
+    const y = range.slice(2);
+    return { from: `${y}-01-01`, to: cap(`${y}-12-31`) };
+  }
   const dow = weekday(today);
   return { from: addDays(today, -((dow + 6) % 7)), to: today }; // week starts Monday
+}
+
+// A whole month or year (used by the reports). Unlike rangeDays, this is not cut off at today.
+function periodDays(p) {
+  const today = todayKey();
+  const year = Number(today.slice(0, 4));
+  const monthEnd = (ym) => {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  };
+  if (p === "lastmonth") {
+    const prev = addDays(`${today.slice(0, 7)}-01`, -1);
+    return { from: `${prev.slice(0, 7)}-01`, to: prev };
+  }
+  if (p === "year") return { from: `${year}-01-01`, to: `${year}-12-31` };
+  if (p === "lastyear") return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
+  if (p.startsWith("m:")) {
+    const ym = p.slice(2);
+    return { from: `${ym}-01`, to: monthEnd(ym) };
+  }
+  if (p.startsWith("y:")) {
+    const y = p.slice(2);
+    return { from: `${y}-01-01`, to: `${y}-12-31` };
+  }
+  const ym = today.slice(0, 7); // "month"
+  return { from: `${ym}-01`, to: monthEnd(ym) };
 }
 
 // Weekends and public holidays from the local holidays file. The leave form uses this to count working days.
@@ -106,15 +186,20 @@ function useNow() {
   return now;
 }
 
-/* ---------- shared Tailwind classes (green, like the file pages) ---------- */
+/* ---------- design tokens (Tailwind classes) ----------
+   ink #0B2B24 | green #008060 / #00664E | canvas #F6F8F7 | line #E3E8E5 | muted #667085 */
 
 const FOCUS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#008060]";
-const BTN = `inline-flex items-center gap-2 rounded-lg border border-[#C9CED6] bg-white px-4 py-2 text-sm text-[#0B2B24] transition hover:bg-[#F6F7F8] disabled:opacity-60 motion-reduce:transition-none ${FOCUS}`;
-const BTN_PRIMARY = `inline-flex items-center gap-2 rounded-lg border border-[#008060] bg-[#008060] px-4 py-2 text-sm text-white transition hover:bg-[#00664E] disabled:opacity-60 motion-reduce:transition-none ${FOCUS}`;
-const INPUT = `rounded-lg border border-[#C9CED6] bg-white px-2.5 py-2 text-sm text-[#0B2B24] ${FOCUS}`;
-const CARD = "rounded-2xl border border-[#E6ECE9] bg-white p-5";
-const TH = "px-3 py-2.5 text-left text-xs font-medium text-[#667085]";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#008060]";
+const BTN = `inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-[#D5DBD8] bg-white px-3.5 text-sm font-medium text-[#0B2B24] shadow-[0_1px_1px_rgba(11,43,36,0.04)] transition hover:border-[#B8C2BD] hover:bg-[#F6F8F7] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`;
+const BTN_PRIMARY = `inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-[#008060] bg-[#008060] px-3.5 text-sm font-medium text-white shadow-[0_1px_1px_rgba(11,43,36,0.12)] transition hover:border-[#00664E] hover:bg-[#00664E] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`;
+const BTN_SM = `inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#D5DBD8] bg-white px-2.5 text-xs font-medium text-[#0B2B24] transition hover:border-[#B8C2BD] hover:bg-[#F6F8F7] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`;
+const BTN_SM_PRIMARY = `inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#008060] bg-[#008060] px-2.5 text-xs font-medium text-white transition hover:bg-[#00664E] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`;
+const INPUT = `h-9 rounded-lg border border-[#D5DBD8] bg-white px-3 text-sm text-[#0B2B24] placeholder:text-[#98A2B3] transition hover:border-[#B8C2BD] motion-reduce:transition-none ${FOCUS}`;
+const CARD = "rounded-xl border border-[#E3E8E5] bg-white p-5 shadow-[0_1px_2px_rgba(11,43,36,0.04)]";
+const TH = "whitespace-nowrap px-4 py-2.5 text-left text-xs font-medium text-[#667085]";
+const TD = "px-4 py-3";
+const ROW = "border-b border-[#EEF1F0] transition-colors last:border-0 hover:bg-[#FAFBFA] motion-reduce:transition-none";
 
 const STATE_TAG = {
   present: { text: "Present", cls: "bg-[#E3F3EC] text-[#00664E]" },
@@ -135,6 +220,8 @@ const PRINT_CSS = `
   @page { margin: 12mm; }
   body * { visibility: hidden !important; }
   #attendance-print, #attendance-print * { visibility: visible !important; }
+  #attendance-print tr { break-inside: avoid; }
+  #attendance-print thead { display: table-header-group; }
   #attendance-print {
     position: absolute !important;
     left: 0;
@@ -142,6 +229,7 @@ const PRINT_CSS = `
     width: 100%;
     border: 0 !important;
     border-radius: 0 !important;
+    box-shadow: none !important;
   }
 }
 `;
@@ -165,8 +253,10 @@ function Banner({ msg }) {
   return (
     <p
       role={msg.ok ? "status" : "alert"}
-      className={`mb-4 rounded-lg px-3 py-2 text-sm ${
-        msg.ok ? "bg-[#E3F3EC] text-[#00664E]" : "bg-[#FDECEA] text-[#8A1C14]"
+      className={`mb-4 rounded-lg border-l-4 px-3.5 py-2.5 text-sm ${
+        msg.ok
+          ? "border-[#008060] bg-[#E8F5EF] text-[#00553F]"
+          : "border-[#D92D20] bg-[#FEF3F2] text-[#8A1C14]"
       }`}
     >
       {msg.text}
@@ -174,17 +264,181 @@ function Banner({ msg }) {
   );
 }
 
-function Chip({ text, cls }) {
-  return <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs ${cls}`}>{text}</span>;
+function Chip({ text, cls, dot = true }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}
+    >
+      {dot && <i className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />}
+      {text}
+    </span>
+  );
+}
+
+function Avatar({ name, size = 32 }) {
+  return (
+    <span
+      style={{ width: size, height: size, fontSize: size * 0.38 }}
+      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[#E3F3EC] font-semibold text-[#00664E]"
+      aria-hidden="true"
+    >
+      {initials(name)}
+    </span>
+  );
+}
+
+function Loading({ text = "Loading..." }) {
+  return (
+    <p className="px-4 py-12 text-center text-sm text-[#667085]" role="status">
+      <span className="animate-pulse motion-reduce:animate-none">{text}</span>
+    </p>
+  );
+}
+
+function Empty({ icon: Icon = CalendarDays, title, hint }) {
+  return (
+    <div className="flex flex-col items-center px-4 py-12 text-center">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F1F5F3] text-[#667085]">
+        <Icon size={20} />
+      </span>
+      <p className="mt-3 text-sm font-medium">{title}</p>
+      {hint && <p className="mt-1 max-w-sm text-sm text-[#667085]">{hint}</p>}
+    </div>
+  );
+}
+
+// A titled block: heading and short description on the left, actions on the right
+function Panel({ title, description, actions, children, className = "", id, flush = false }) {
+  return (
+    <section id={id} className={`mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)] ${className}`}>
+      {(title || actions) && (
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+          <div className="min-w-0">
+            {title && <h3 className="text-base font-semibold">{title}</h3>}
+            {description && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[#667085]">{description}</p>}
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        </header>
+      )}
+      <div className={flush ? "" : "p-5"}>{children}</div>
+    </section>
+  );
+}
+
+function Field({ label, children, className = "" }) {
+  return (
+    <label className={`block text-xs font-medium text-[#475467] ${className}`}>
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Toggle({ checked, onChange, label, hint }) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-6 py-3.5">
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs leading-relaxed text-[#667085]">{hint}</span>}
+      </span>
+      <span className="relative mt-0.5 inline-flex shrink-0">
+        <input
+          type="checkbox"
+          role="switch"
+          className="peer sr-only"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="h-6 w-11 rounded-full bg-[#C9D1CD] transition-colors peer-checked:bg-[#008060] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#008060] motion-reduce:transition-none" />
+        <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5 motion-reduce:transition-none" />
+      </span>
+    </label>
+  );
 }
 
 function RangeSelect({ value, onChange }) {
+  const thisYear = Number(todayKey().slice(0, 4));
+  const kind = value.startsWith("m:") ? "pickmonth" : value.startsWith("y:") ? "pickyear" : value;
+  const onKind = (k) => {
+    if (k === "pickmonth") onChange(`m:${todayKey().slice(0, 7)}`);
+    else if (k === "pickyear") onChange(`y:${thisYear}`);
+    else onChange(k);
+  };
   return (
-    <select className={INPUT} value={value} onChange={(e) => onChange(e.target.value)} aria-label="Date range">
-      <option value="week">This week</option>
-      <option value="month">This month</option>
-      <option value="30d">Last 30 days</option>
-    </select>
+    <>
+      <select className={INPUT} value={kind} onChange={(e) => onKind(e.target.value)} aria-label="Date range">
+        <option value="week">This week</option>
+        <option value="month">This month</option>
+        <option value="lastmonth">Last month</option>
+        <option value="30d">Last 30 days</option>
+        <option value="year">This year</option>
+        <option value="lastyear">Last year</option>
+        <option value="pickmonth">Choose a month</option>
+        <option value="pickyear">Choose a year</option>
+      </select>
+      {kind === "pickmonth" && (
+        <input
+          type="month"
+          className={INPUT}
+          value={value.slice(2)}
+          max={todayKey().slice(0, 7)}
+          onChange={(e) => e.target.value && onChange(`m:${e.target.value}`)}
+          aria-label="Month"
+        />
+      )}
+      {kind === "pickyear" && (
+        <select className={INPUT} value={value.slice(2)} onChange={(e) => onChange(`y:${e.target.value}`)} aria-label="Year">
+          {[0, 1, 2, 3, 4].map((i) => thisYear - i).map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+}
+
+// Month or year picker for the reports. With future set, next year and later months can be chosen too (leave).
+function PeriodSelect({ value, onChange, future = false }) {
+  const thisYear = Number(todayKey().slice(0, 4));
+  const kind = value.startsWith("m:") ? "pickmonth" : value.startsWith("y:") ? "pickyear" : value;
+  const onKind = (k) => {
+    if (k === "pickmonth") onChange(`m:${todayKey().slice(0, 7)}`);
+    else if (k === "pickyear") onChange(`y:${thisYear}`);
+    else onChange(k);
+  };
+  const years = Array.from({ length: 6 }, (_, i) => (future ? thisYear + 1 : thisYear) - i);
+  return (
+    <>
+      <select className={INPUT} value={kind} onChange={(e) => onKind(e.target.value)} aria-label="Period">
+        <option value="month">This month</option>
+        <option value="lastmonth">Last month</option>
+        <option value="year">This year</option>
+        <option value="lastyear">Last year</option>
+        <option value="pickmonth">Choose a month</option>
+        <option value="pickyear">Choose a year</option>
+      </select>
+      {kind === "pickmonth" && (
+        <input
+          type="month"
+          className={INPUT}
+          value={value.slice(2)}
+          max={future ? undefined : todayKey().slice(0, 7)}
+          onChange={(e) => e.target.value && onChange(`m:${e.target.value}`)}
+          aria-label="Month"
+        />
+      )}
+      {kind === "pickyear" && (
+        <select className={INPUT} value={value.slice(2)} onChange={(e) => onChange(`y:${e.target.value}`)} aria-label="Year">
+          {years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+      )}
+    </>
   );
 }
 
@@ -206,7 +460,7 @@ function DayNote({ day }) {
       : "";
   if (!text) return null;
   return (
-    <p role="status" className={`mb-4 rounded-lg px-3 py-2 text-sm ${tag.cls}`}>
+    <p role="status" className={`mb-5 rounded-lg px-4 py-2.5 text-sm font-medium ${tag.cls}`}>
       {text}
     </p>
   );
@@ -215,20 +469,23 @@ function DayNote({ day }) {
 function SummaryCards({ summary }) {
   if (!summary) return null;
   const items = [
-    ["Present", summary.present, "text-[#00664E]"],
-    ["Late", summary.late, "text-[#8A4B00]"],
-    ["Absent", summary.absent, "text-[#8A1C14]"],
-    ["On leave", summary.leave, "text-[#8A4B00]"],
-    ["Away on duty", summary.away ?? 0, "text-[#2E5AAC]"],
-    ["Remote", summary.remote ?? 0, "text-[#1F5FA8]"],
-    ["Hours worked", Math.round(summary.hours * 10) / 10, ""],
+    ["Present", summary.present, "text-[#00664E]", "bg-[#0F9F77]"],
+    ["Late", summary.late, "text-[#8A4B00]", "bg-[#F79009]"],
+    ["Absent", summary.absent, "text-[#8A1C14]", "bg-[#D92D20]"],
+    ["On leave", summary.leave, "text-[#8A4B00]", "bg-[#F79009]"],
+    ["Away on duty", summary.away ?? 0, "text-[#2E5AAC]", "bg-[#4F7CD8]"],
+    ["Remote", summary.remote ?? 0, "text-[#1F5FA8]", "bg-[#3B8BDB]"],
+    ["Hours worked", Math.round(summary.hours * 10) / 10, "text-[#0B2B24]", "bg-[#98A2B3]"],
   ];
   return (
-    <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7 print:hidden">
-      {items.map(([label, value, cls]) => (
-        <div key={label} className={CARD}>
-          <p className="text-xs font-medium text-[#667085]">{label}</p>
-          <p className={`mt-1 text-2xl font-semibold ${cls}`}>{value}</p>
+    <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7 print:hidden">
+      {items.map(([label, value, cls, dotCls]) => (
+        <div key={label} className="rounded-xl border border-[#E3E8E5] bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-[#667085]">
+            <i className={`h-1.5 w-1.5 rounded-full ${dotCls}`} />
+            {label}
+          </p>
+          <p className={`mt-1.5 text-2xl font-semibold tabular-nums ${cls}`}>{value}</p>
         </div>
       ))}
     </div>
@@ -239,11 +496,11 @@ function SummaryCards({ summary }) {
 function HistoryTable({ days }) {
   const today = todayKey();
   const rows = [...days].reverse();
-  if (!rows.length) return <p className="px-4 py-10 text-center text-sm text-[#667085]">No days in this period.</p>;
+  if (!rows.length) return <Empty title="No days in this period" hint="Pick a longer range to see more of your history." />;
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] border-collapse text-sm">
-        <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+        <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
           <tr>
             <th className={TH}>Date</th>
             <th className={TH}>Status</th>
@@ -257,22 +514,16 @@ function HistoryTable({ days }) {
             const tag = STATE_TAG[d.state] || STATE_TAG.absent;
             const r = d.record;
             return (
-              <tr
-                key={d.date}
-                className={`border-b border-[#EEF1F0] last:border-0 ${r ? "" : "bg-[#FAFBFA] text-[#667085]"}`}
-              >
-                <td className="whitespace-nowrap px-3 py-2.5">{dayLabel(d.date)}</td>
-                <td className="px-3 py-2.5">
-                  <Chip text={(d.state === "holiday" || d.state === "away") && d.note ? d.note : tag.text} cls={tag.cls} />
-                  {r?.late && (
-                    <>
-                      {" "}
-                      <Chip text="Late" cls={LATE_CLS} />
-                    </>
-                  )}
+              <tr key={d.date} className={`${ROW} ${r ? "" : "text-[#667085]"}`}>
+                <td className={`${TD} whitespace-nowrap font-medium`}>{dayLabel(d.date)}</td>
+                <td className={TD}>
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <Chip text={(d.state === "holiday" || d.state === "away") && d.note ? d.note : tag.text} cls={tag.cls} />
+                    {r?.late && <Chip text="Late" cls={LATE_CLS} />}
+                  </span>
                 </td>
-                <td className="px-3 py-2.5">{r?.in ? timeOf(r.in) : "-"}</td>
-                <td className="px-3 py-2.5">
+                <td className={`${TD} tabular-nums`}>{r?.in ? timeOf(r.in) : "-"}</td>
+                <td className={`${TD} tabular-nums`}>
                   {r?.out ? (
                     timeOf(r.out)
                   ) : r?.in ? (
@@ -285,7 +536,7 @@ function HistoryTable({ days }) {
                     "-"
                   )}
                 </td>
-                <td className="px-3 py-2.5 font-medium">{hoursText(r?.hours)}</td>
+                <td className={`${TD} font-medium tabular-nums`}>{hoursText(r?.hours)}</td>
               </tr>
             );
           })}
@@ -328,19 +579,24 @@ function exportDays(days, prefix) {
 const sourceLabel = (source) =>
   source === "scanner" ? "Office scanner" : source === "admin" ? "Corrected by admin" : source ? "Phone or laptop" : "-";
 
-function exportDay(date, records) {
+function exportDay(date, records, others = []) {
   downloadCsv(
-    ["Date", "Name", "User ID", "Clock in (EAT)", "Clock out (EAT)", "Hours", "Late", "Source"],
-    records.map((r) => [
-      date,
-      r.userName,
-      r.userId,
-      r.in ? timeOf(r.in) : "",
-      r.out ? timeOf(r.out) : "",
-      r.hours ?? "",
-      r.late ? "Yes" : "",
-      sourceLabel(r.source),
-    ]),
+    ["Date", "Name", "User ID", "Status", "Note", "Clock in (EAT)", "Clock out (EAT)", "Hours", "Late", "Source"],
+    [
+      ...records.map((r) => [
+        date,
+        r.userName,
+        r.userId,
+        STATE_TAG.present.text,
+        "",
+        r.in ? timeOf(r.in) : "",
+        r.out ? timeOf(r.out) : "",
+        r.hours ?? "",
+        r.late ? "Yes" : "",
+        sourceLabel(r.source),
+      ]),
+      ...others.map((p) => [date, p.userName, p.userId, STATE_TAG[p.state]?.text || p.state, p.note || "", "", "", "", "", ""]),
+    ],
     `team-attendance-${date}`
   );
 }
@@ -392,41 +648,51 @@ function PasskeyCard({ today, onChange }) {
   }
 
   return (
-    <section className={`${CARD} mb-6`} aria-label="My phone">
-      <h3 className="font-medium">My phone</h3>
-      <p className="mt-1 text-sm text-[#667085]">
-        {today.requirePasskey
-          ? "To clock in you confirm with your fingerprint, face or screen PIN on a device you have registered."
-          : "Register your phone so clocking in is confirmed with your fingerprint, face or screen PIN."}{" "}
-        Your fingerprint never leaves your phone. If the clock page says your phone isn't registered, remove it here and
-        register it again.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
-      {items && items.length > 0 && (
-        <ul className="mb-3 divide-y divide-[#EEF1F0] text-sm">
+    <Panel
+      title="My phone"
+      description={
+        <>
+          {today.requirePasskey
+            ? "To clock in you confirm with your fingerprint, face or screen PIN on a device you have registered."
+            : "Register your phone so clocking in is confirmed with your fingerprint, face or screen PIN."}{" "}
+          Your fingerprint never leaves your phone. If the clock page says your phone isn&apos;t registered, remove it
+          here and register it again.
+        </>
+      }
+      actions={
+        supported && (
+          <button className={items?.length ? BTN : BTN_PRIMARY} onClick={onRegister} disabled={busy}>
+            <Fingerprint size={16} />
+            {busy ? "Waiting for your phone..." : items?.length ? "Register this device too" : "Register this device"}
+          </button>
+        )
+      }
+    >
+      <Banner msg={msg} />
+      {items && items.length > 0 ? (
+        <ul className="divide-y divide-[#EEF1F0] text-sm">
           {items.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 py-2">
+            <li key={p.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#E3F3EC] text-[#00664E]">
+                <Fingerprint size={18} />
+              </span>
               <span className="flex-1 font-medium">{p.label}</span>
               <span className="text-xs text-[#667085]">Added {fullDate(dayKey(p.createdAt))}</span>
-              <button className={`${BTN} px-3 py-1.5`} onClick={() => onRemove(p)}>
+              <button className={BTN_SM} onClick={() => onRemove(p)}>
                 Remove
               </button>
             </li>
           ))}
         </ul>
-      )}
-      {supported ? (
-        <button className={items?.length ? BTN : BTN_PRIMARY} onClick={onRegister} disabled={busy}>
-          {busy ? "Waiting for your phone..." : items?.length ? "Register this device too" : "Register this device"}
-        </button>
       ) : (
-        <p className="text-sm text-[#8A4B00]">
-          This browser can't use fingerprint or PIN here. Open the portal in Chrome or Safari over https.
+        <p className="text-sm text-[#667085]">No devices registered yet.</p>
+      )}
+      {!supported && (
+        <p className="mt-3 rounded-lg bg-[#FFF4E5] px-3.5 py-2.5 text-sm text-[#8A4B00]">
+          This browser can&apos;t use fingerprint or PIN here. Open the portal in Chrome or Safari over https.
         </p>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -435,7 +701,6 @@ function PasskeyCard({ today, onChange }) {
 // To use your own logo: save it in the portal's public folder (for example public/logo.png) and set this to "/logo.png".
 // Leave it empty to use the green "E" mark from the login page.
 const LOGO_SRC = "/logo.png";
-const BRAND_FONT = '"Fraunces", Georgia, serif';
 
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -582,27 +847,26 @@ function QrScreen() {
     <>
       <style>{POSTER_CSS}</style>
 
-      <section className={`${CARD} mb-6 print:hidden`}>
-        <h3 className="font-medium">QR poster</h3>
-        <p className="mt-1 text-sm text-[#667085]">
-          Print this A4 poster and put it up at the office. Staff scan it with their phone camera, which opens a clock page,
-          then tap the button and confirm with their fingerprint, face or PIN. No password is needed. It only works while
-          they are on the office network, so scanning it from home or on mobile data won't let anyone clock in. If a photo
-          of the poster is ever shared around, make a new code. In the print window, choose A4, margins None, and turn on
-          background graphics so the colours print.
+      <Panel
+        className="print:hidden"
+        title="QR poster"
+        description="Print this A4 poster and put it up at the office. Staff scan it with their phone camera, which opens a clock page, then tap the button and confirm with their fingerprint, face or PIN. No password is needed. It only works while they are on the office network, so scanning it from home or on mobile data won't let anyone clock in. If a photo of the poster is ever shared around, make a new code."
+        actions={
+          <>
+            <button className={BTN} onClick={onRotate} disabled={busy || !token}>
+              Make a new code
+            </button>
+            <button className={BTN_PRIMARY} onClick={() => window.print()} disabled={!img}>
+              <Printer size={16} /> Print poster
+            </button>
+          </>
+        }
+      >
+        <Banner msg={msg} />
+        <p className="rounded-lg bg-[#F6F8F7] px-3.5 py-2.5 text-sm text-[#475467]">
+          In the print window, choose A4, margins None, and turn on background graphics so the colours print.
         </p>
-        <div className="mt-3">
-          <Banner msg={msg} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button className={BTN_PRIMARY} onClick={() => window.print()} disabled={!img}>
-            <Printer size={16} /> Print poster
-          </button>
-          <button className={BTN} onClick={onRotate} disabled={busy || !token}>
-            Make a new code
-          </button>
-        </div>
-      </section>
+      </Panel>
 
       <div className="overflow-x-auto pb-4">
         <div id="attendance-print" className="poster-frame">
@@ -761,6 +1025,10 @@ function MyAttendance() {
   const todayDay = data?.days.find((d) => d.date === todayKey());
   const workedToday = rec?.in ? (rec.out ? rec.hours : (now - new Date(rec.in)) / 36e5) : 0;
 
+  // How much of the working day is done (only when the working hours are set)
+  const expected = today?.config ? (toMinutes(today.config.workEnd) - toMinutes(today.config.workStart)) / 60 : NaN;
+  const pct = expected > 0 ? Math.min(100, Math.round((workedToday / expected) * 100)) : null;
+
   async function onClock() {
     setBusy(true);
     setMsg(null);
@@ -788,93 +1056,128 @@ function MyAttendance() {
       <Banner msg={msg} />
       <DayNote day={todayDay} />
 
-      <div className="mb-6 grid gap-4 lg:grid-cols-[2fr_1fr]">
+      <div className="mb-6 grid gap-4 lg:grid-cols-[1.7fr_1fr]">
         {/* CLOCK CARD */}
-        <section className={CARD} aria-label="Clock in and out">
+        <section
+          aria-label="Clock in and out"
+          className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#0B2B24] via-[#0A4A3A] to-[#00664E] p-6 text-white shadow-[0_8px_24px_rgba(11,43,36,0.18)] sm:p-8"
+        >
+          <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full bg-white/[0.05]" />
+          <div className="pointer-events-none absolute -bottom-24 right-24 h-52 w-52 rounded-full bg-white/[0.04]" />
           {!today ? (
-            <p className="text-sm text-[#667085]">Loading...</p>
+            <p className="relative text-sm text-white/70">Loading...</p>
           ) : (
-            <div className="flex flex-wrap items-center gap-5">
-              <button
-                onClick={onClock}
-                disabled={busy || !today.canClock || needPhone || needQr}
-                className={`flex h-28 w-28 shrink-0 flex-col items-center justify-center gap-1 rounded-full text-white transition disabled:opacity-60 motion-reduce:transition-none ${FOCUS} ${
-                  action === "out" ? "bg-[#B54708] hover:bg-[#93390A]" : "bg-[#008060] hover:bg-[#00664E]"
-                }`}
-              >
-                <Fingerprint size={34} />
-                <span className="text-center text-sm font-medium">
-                  {busy ? "Please wait..." : !rec?.in ? "Clock in" : finished ? "Clock out again" : "Clock out"}
-                </span>
-              </button>
-              <div>
-                <p className="text-3xl font-semibold tabular-nums">
-                  {now.toLocaleTimeString("en-GB", { timeZone: TZ })}
-                </p>
-                <p className="text-sm text-[#667085]">
+            <div className="relative flex flex-wrap items-center justify-between gap-6">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-white/70">
                   {now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: TZ })}
                 </p>
-                <p className="mt-2 text-sm">
+                <p
+                  style={{ fontFamily: BRAND_FONT }}
+                  className="mt-1 text-5xl font-semibold tabular-nums leading-none sm:text-6xl"
+                >
+                  {now.toLocaleTimeString("en-GB", { timeZone: TZ })}
+                </p>
+                <p className="mt-4 flex flex-wrap items-center gap-2 text-sm">
                   {clockedIn ? (
-                    <span className="font-medium text-[#00664E]">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 font-medium">
+                      <i className="h-2 w-2 animate-pulse rounded-full bg-[#5EE0B0] motion-reduce:animate-none" />
                       Clocked in since {timeOf(rec.in)} ({hoursText(workedToday)})
                     </span>
                   ) : finished ? (
-                    <span className="font-medium text-[#00664E]">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 font-medium">
+                      <i className="h-2 w-2 rounded-full bg-[#5EE0B0]" />
                       Clocked out at {timeOf(rec.out)} after {hoursText(rec.hours)}
                     </span>
                   ) : (
-                    <span className="text-[#475467]">Not clocked in.</span>
+                    <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-white/80">
+                      <i className="h-2 w-2 rounded-full bg-white/50" />
+                      Not clocked in
+                    </span>
                   )}
-                  {rec?.late && (
-                    <>
-                      {" "}
-                      <Chip text="Late" cls={LATE_CLS} />
-                    </>
-                  )}
+                  {rec?.late && <Chip text="Late" cls="bg-[#FFF4E5] text-[#8A4B00]" />}
                 </p>
-                <p className="mt-0.5 text-xs text-[#667085]">
+                <p className="mt-3 max-w-sm text-xs leading-relaxed text-white/60">
                   You can also press your finger on the office scanner when it is working. Both count toward your attendance.
                 </p>
-                {needQr && today.canClock && (
-                  <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
-                    Scan the QR code at the office with your phone camera (while on the office Wi-Fi), then tap Clock in.
-                  </p>
-                )}
-                {!today.canClock && today.reason && (
-                  <p role="status" className="mt-2 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#8A4B00]">
-                    {today.reason}
-                  </p>
-                )}
               </div>
+
+              <button
+                onClick={onClock}
+                disabled={busy || !today.canClock || needPhone || needQr}
+                className={`flex h-32 w-32 shrink-0 flex-col items-center justify-center gap-1.5 rounded-full shadow-[0_6px_20px_rgba(0,0,0,0.25)] ring-4 ring-white/20 transition hover:scale-[1.03] hover:ring-white/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 motion-reduce:transition-none motion-reduce:hover:scale-100 ${
+                  action === "out" ? "bg-[#FFE4C4] text-[#93390A]" : "bg-white text-[#00664E]"
+                } focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white`}
+              >
+                <Fingerprint size={36} />
+                <span className="text-center text-sm font-semibold leading-tight">
+                  {busy ? "Please wait..." : !rec?.in ? "Clock in" : finished ? "Clock out again" : "Clock out"}
+                </span>
+              </button>
+
+              {(needQr && today.canClock) || (!today.canClock && today.reason) ? (
+                <div className="w-full space-y-2">
+                  {needQr && today.canClock && (
+                    <p role="status" className="rounded-lg bg-white/10 px-3.5 py-2.5 text-sm text-white">
+                      Scan the QR code at the office with your phone camera (while on the office Wi-Fi), then tap Clock in.
+                    </p>
+                  )}
+                  {!today.canClock && today.reason && (
+                    <p role="status" className="rounded-lg bg-white/10 px-3.5 py-2.5 text-sm text-white">
+                      {today.reason}
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
           )}
         </section>
 
         {/* TODAY */}
         <section className={CARD} aria-label="Today">
-          <h3 className="text-sm font-medium text-[#667085]">Today</h3>
-          <p className="mt-1 text-2xl font-semibold">{hoursText(workedToday)}</p>
-          <ul className="mt-3 space-y-1.5 text-sm">
+          <h3 className="text-sm font-medium text-[#667085]">Hours today</h3>
+          <p className="mt-1 text-3xl font-semibold tabular-nums">{hoursText(workedToday)}</p>
+          {pct !== null && (
+            <div className="mt-3">
+              <div
+                className="h-2 overflow-hidden rounded-full bg-[#EEF1F0]"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                aria-label="Share of the working day completed"
+              >
+                <div className="h-full rounded-full bg-[#008060] transition-[width] motion-reduce:transition-none" style={{ width: `${pct}%` }} />
+              </div>
+              <p className="mt-1.5 text-xs text-[#667085]">{pct}% of the working day</p>
+            </div>
+          )}
+          <ul className="mt-4 space-y-2.5 border-t border-[#EEF1F0] pt-4 text-sm">
             {!rec?.in && !rec?.out && <li className="text-[#667085]">No clock in yet.</li>}
             {rec?.in && (
-              <li className="flex items-center gap-2">
-                <i className="h-2 w-2 rounded-full bg-[#0F9F77]" />
-                Clocked in at {timeOf(rec.in)}
+              <li className="flex items-center gap-2.5">
+                <i className="h-2.5 w-2.5 rounded-full bg-[#0F9F77]" />
+                <span className="flex-1 text-[#475467]">Clocked in</span>
+                <span className="font-medium tabular-nums">{timeOf(rec.in)}</span>
               </li>
             )}
             {rec?.out && (
-              <li className="flex items-center gap-2">
-                <i className="h-2 w-2 rounded-full bg-[#B54708]" />
-                Clocked out at {timeOf(rec.out)}
+              <li className="flex items-center gap-2.5">
+                <i className="h-2.5 w-2.5 rounded-full bg-[#B54708]" />
+                <span className="flex-1 text-[#475467]">Clocked out</span>
+                <span className="font-medium tabular-nums">{timeOf(rec.out)}</span>
+              </li>
+            )}
+            {today?.config && (
+              <li className="flex items-center gap-2.5 text-[#667085]">
+                <Clock size={14} />
+                <span className="flex-1">Working hours</span>
+                <span className="tabular-nums">
+                  {today.config.workStart} to {today.config.workEnd}
+                </span>
               </li>
             )}
           </ul>
-          {today?.config && (
-            <p className="mt-3 text-xs text-[#667085]">
-              Working hours {today.config.workStart} to {today.config.workEnd}
-            </p>
-          )}
         </section>
       </div>
 
@@ -883,9 +1186,12 @@ function MyAttendance() {
       <SummaryCards summary={data?.summary} />
 
       {/* HISTORY */}
-      <section id="attendance-print" className="mb-6 rounded-2xl border border-[#E6ECE9] bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E6ECE9] px-5 py-3 print:hidden">
-          <h3 className="font-medium">My history</h3>
+      <section id="attendance-print" className="mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+          <div>
+            <h3 className="text-base font-semibold">My history</h3>
+            <p className="mt-0.5 text-sm text-[#667085]">Every day in the period, newest first.</p>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <RangeSelect value={range} onChange={setRange} />
             <button
@@ -905,7 +1211,7 @@ function MyAttendance() {
           subtitle={name}
           period={`${fullDate(rangeDays(range).from)} to ${fullDate(rangeDays(range).to)}`}
         />
-        {data ? <HistoryTable days={data.days} /> : <p className="px-4 py-10 text-center text-sm text-[#667085]">Loading...</p>}
+        {data ? <HistoryTable days={data.days} /> : <Loading />}
       </section>
     </>
   );
@@ -949,35 +1255,29 @@ function CorrectForm({ date, initial, onDone, onCancel }) {
   }
 
   return (
-    <section className={`${CARD} mb-4 print:hidden`}>
-      <h3 className="font-medium">{known ? `Correct ${initial.userName || initial.userId}` : "Add a record"}</h3>
-      <p className="mt-1 text-sm text-[#667085]">
-        For {fullDate(date)}. Times are Nairobi time. Leave a time empty to clear it.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
+    <Panel
+      className="print:hidden"
+      title={known ? `Correct ${initial.userName || initial.userId}` : "Add a record"}
+      description={`For ${fullDate(date)}. Times are Nairobi time. Leave a time empty to clear it.`}
+    >
+      <Banner msg={msg} />
       <form className="flex flex-wrap items-end gap-3" onSubmit={onSubmit}>
         {!known && (
           <>
-            <label className="text-xs text-[#667085]">
-              User ID
-              <input className={`${INPUT} mt-1 block w-64`} value={f.userId} onChange={set("userId")} />
-            </label>
-            <label className="text-xs text-[#667085]">
-              Name
-              <input className={`${INPUT} mt-1 block w-48`} value={f.userName} onChange={set("userName")} />
-            </label>
+            <Field label="User ID">
+              <input className={`${INPUT} mt-1.5 block w-64`} value={f.userId} onChange={set("userId")} />
+            </Field>
+            <Field label="Name">
+              <input className={`${INPUT} mt-1.5 block w-48`} value={f.userName} onChange={set("userName")} />
+            </Field>
           </>
         )}
-        <label className="text-xs text-[#667085]">
-          Clock in
-          <input type="time" className={`${INPUT} mt-1 block`} value={f.in} onChange={set("in")} />
-        </label>
-        <label className="text-xs text-[#667085]">
-          Clock out
-          <input type="time" className={`${INPUT} mt-1 block`} value={f.out} onChange={set("out")} />
-        </label>
+        <Field label="Clock in">
+          <input type="time" className={`${INPUT} mt-1.5 block`} value={f.in} onChange={set("in")} />
+        </Field>
+        <Field label="Clock out">
+          <input type="time" className={`${INPUT} mt-1.5 block`} value={f.out} onChange={set("out")} />
+        </Field>
         <button className={BTN_PRIMARY} disabled={busy}>
           {busy ? "Saving..." : "Save record"}
         </button>
@@ -985,7 +1285,7 @@ function CorrectForm({ date, initial, onDone, onCancel }) {
           Cancel
         </button>
       </form>
-    </section>
+    </Panel>
   );
 }
 
@@ -1012,27 +1312,35 @@ function PersonHistory({ person, onClose }) {
   }, [range, person.userId]);
 
   return (
-    <section className="mb-4 rounded-2xl border border-[#E6ECE9] bg-white print:hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E6ECE9] px-5 py-3">
-        <h3 className="font-medium">{person.userName || person.userId}</h3>
-        <div className="flex items-center gap-2">
+    <Panel
+      className="print:hidden"
+      flush
+      title={person.userName || person.userId}
+      description="Attendance history"
+      actions={
+        <>
           <RangeSelect value={range} onChange={setRange} />
           <button className={BTN} onClick={onClose}>
             Close
           </button>
+        </>
+      }
+    >
+      {error && (
+        <div className="p-5 pb-0">
+          <Banner msg={{ ok: false, text: error }} />
         </div>
-      </div>
-      <div className="p-5 pb-0">{error && <Banner msg={{ ok: false, text: error }} />}</div>
+      )}
       {data && (
         <>
-          <div className="px-5 pt-1">
+          <div className="px-5 pt-5">
             <SummaryCards summary={data.summary} />
           </div>
           <HistoryTable days={data.days} />
         </>
       )}
-      {!data && !error && <p className="px-4 py-10 text-center text-sm text-[#667085]">Loading...</p>}
-    </section>
+      {!data && !error && <Loading />}
+    </Panel>
   );
 }
 
@@ -1063,16 +1371,17 @@ function PersonPhones({ person, onClose }) {
   }
 
   return (
-    <section className={`${CARD} mb-4 print:hidden`}>
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="font-medium">Phones registered by {person.userName || person.userId}</h3>
+    <Panel
+      className="print:hidden"
+      title={`Phones registered by ${person.userName || person.userId}`}
+      description="Remove a phone when it is lost or the person leaves."
+      actions={
         <button className={BTN} onClick={onClose}>
           Close
         </button>
-      </div>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
+      }
+    >
+      <Banner msg={msg} />
       {!items ? (
         <p className="text-sm text-[#667085]">Loading...</p>
       ) : items.length === 0 ? (
@@ -1080,20 +1389,32 @@ function PersonPhones({ person, onClose }) {
       ) : (
         <ul className="divide-y divide-[#EEF1F0] text-sm">
           {items.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 py-2">
+            <li key={p.id} className="flex flex-wrap items-center gap-3 py-2.5 first:pt-0 last:pb-0">
               <span className="flex-1 font-medium">{p.label}</span>
               <span className="text-xs text-[#667085]">
                 Added {fullDate(dayKey(p.createdAt))}
                 {p.lastUsedAt ? `, last used ${fullDate(dayKey(p.lastUsedAt))}` : ""}
               </span>
-              <button className={`${BTN} px-3 py-1.5`} onClick={() => onRemove(p)}>
+              <button className={BTN_SM} onClick={() => onRemove(p)}>
                 Remove
               </button>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
+  );
+}
+
+function StatTile({ label, value, cls = "", dot }) {
+  return (
+    <div className={CARD}>
+      <p className="flex items-center gap-1.5 text-xs font-medium text-[#667085]">
+        {dot && <i className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
+        {label}
+      </p>
+      <p className={`mt-1.5 text-3xl font-semibold tabular-nums ${cls}`}>{value}</p>
+    </div>
   );
 }
 
@@ -1102,6 +1423,7 @@ function TeamAttendance() {
   const [q, setQ] = useState("");
   const [records, setRecords] = useState([]);
   const [off, setOff] = useState([]); // people on approved leave, a trip or remote work that day, with no clock record
+  const [absent, setAbsent] = useState([]); // usual staff with no clock record and nothing approved that day
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null); // a record to correct, or {} to add a new one
@@ -1118,6 +1440,7 @@ function TeamAttendance() {
         setError("");
         setRecords(r.records || []);
         setOff(r.off || []);
+        setAbsent(r.absent || []);
       })
       .catch((e) => on && setError(e.message))
       .finally(() => on && setLoading(false));
@@ -1135,71 +1458,66 @@ function TeamAttendance() {
   const late = records.filter((r) => r.late).length;
   const isToday = date === todayKey();
 
+  // Everyone who is not in the clock table: leave, away on duty, remote, absent (filtered by the search box too)
+  const others = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const all = [...off, ...absent];
+    return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
+  }, [off, absent, q]);
+  const count = (state) => others.filter((p) => p.state === state).length;
+  const hasAnything = filtered.length > 0 || others.length > 0;
+
   return (
     <>
-      {error && <p className="mb-4 rounded-lg bg-[#FDECEA] px-3 py-2 text-sm text-[#8A1C14]">{error}</p>}
+      {error && <Banner msg={{ ok: false, text: error }} />}
 
-      <div className="mb-4 grid grid-cols-3 gap-3">
-        <div className={CARD}>
-          <p className="text-xs font-medium text-[#667085]">Present</p>
-          <p className="mt-1 text-2xl font-semibold">{records.length}</p>
-        </div>
-        <div className={CARD}>
-          <p className="text-xs font-medium text-[#667085]">Late</p>
-          <p className="mt-1 text-2xl font-semibold text-[#8A4B00]">{late}</p>
-        </div>
-        <div className={CARD}>
-          <p className="text-xs font-medium text-[#667085]">{isToday ? "In the office now" : "No clock-out"}</p>
-          <p className="mt-1 text-2xl font-semibold text-[#00664E]">{stillIn}</p>
-        </div>
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatTile label="Present" value={records.length} dot="bg-[#0F9F77]" />
+        <StatTile label="Late" value={late} cls="text-[#8A4B00]" dot="bg-[#F79009]" />
+        <StatTile
+          label={isToday ? "In the office now" : "No clock-out"}
+          value={stillIn}
+          cls="text-[#00664E]"
+          dot="bg-[#4F7CD8]"
+        />
       </div>
 
-      {off.length > 0 && (
-        <section className={`${CARD} mb-4 print:hidden`}>
-          <h3 className="font-medium">Away on {fullDate(date)}</h3>
-          <ul className="mt-3 divide-y divide-[#EEF1F0] text-sm">
-            {off.map((p) => (
-              <li key={`${p.userId}|${p.state}`} className="flex items-center gap-3 py-2">
-                <span className="flex-1 font-medium">{p.userName || p.userId}</span>
-                {p.note && <span className="capitalize text-[#667085]">{p.note}</span>}
-                <Chip text={STATE_TAG[p.state]?.text || p.state} cls={STATE_TAG[p.state]?.cls || STATE_TAG.away.cls} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <div className="mb-4 flex flex-wrap items-center gap-2 print:hidden">
-        <input
-          type="date"
-          className={INPUT}
-          value={date}
-          max={todayKey()}
-          onChange={(e) => e.target.value && setDate(e.target.value)}
-          aria-label="Date"
-        />
-        <button className={BTN} onClick={() => setDate(addDays(date, -1))}>
-          Previous day
-        </button>
-        <button className={BTN} onClick={() => setDate(addDays(date, 1))} disabled={date >= todayKey()}>
-          Next day
-        </button>
-        <input
-          type="search"
-          className={`${INPUT} w-56`}
-          placeholder="Search by name"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          aria-label="Search by name"
-        />
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#E3E8E5] bg-white p-3 shadow-[0_1px_2px_rgba(11,43,36,0.04)] print:hidden">
+        <div className="inline-flex items-center gap-1">
+          <button className={BTN} onClick={() => setDate(addDays(date, -1))} aria-label="Previous day">
+            Previous
+          </button>
+          <input
+            type="date"
+            className={INPUT}
+            value={date}
+            max={todayKey()}
+            onChange={(e) => e.target.value && setDate(e.target.value)}
+            aria-label="Date"
+          />
+          <button className={BTN} onClick={() => setDate(addDays(date, 1))} disabled={date >= todayKey()} aria-label="Next day">
+            Next
+          </button>
+        </div>
+        <div className="relative">
+          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
+          <input
+            type="search"
+            className={`${INPUT} w-56 pl-9`}
+            placeholder="Search by name"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search by name"
+          />
+        </div>
         <span className="flex-1" />
         <button className={BTN} onClick={() => setEditing({})}>
-          Add record
+          <Plus size={16} /> Add record
         </button>
-        <button className={BTN} onClick={() => exportDay(date, filtered)} disabled={!filtered.length}>
+        <button className={BTN} onClick={() => exportDay(date, filtered, others)} disabled={!hasAnything}>
           <Download size={16} /> Download CSV
         </button>
-        <button className={BTN} onClick={() => window.print()} disabled={!filtered.length}>
+        <button className={BTN} onClick={() => window.print()} disabled={!hasAnything}>
           <Printer size={16} /> Print
         </button>
       </div>
@@ -1219,72 +1537,285 @@ function TeamAttendance() {
       {history && <PersonHistory person={history} onClose={() => setHistory(null)} />}
       {phones && <PersonPhones person={phones} onClose={() => setPhones(null)} />}
 
-      <div id="attendance-print" className="rounded-2xl border border-[#E6ECE9] bg-white">
+      <div id="attendance-print" className="mb-6 overflow-hidden rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
         <PrintHeader title="Team attendance" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={fullDate(date)} />
-        {loading ? (
-          <p className="px-4 py-10 text-center text-sm text-[#667085]">Loading...</p>
-        ) : !filtered.length ? (
-          <p className="px-4 py-10 text-center text-sm text-[#667085]">No attendance recorded on {fullDate(date)}.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] border-collapse text-sm">
-              <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
-                <tr>
-                  <th className={TH}>Name</th>
-                  <th className={TH}>Clock in</th>
-                  <th className={TH}>Clock out</th>
-                  <th className={TH}>Hours</th>
-                  <th className={TH}>Source</th>
-                  <th className={`${TH} print:hidden`} />
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((r) => (
-                  <tr key={r.userId} className="border-b border-[#EEF1F0] last:border-0">
-                    <td className="px-3 py-2.5">
-                      <span className="font-medium">{r.userName || r.userId}</span>
-                      {r.late && (
-                        <>
-                          {" "}
-                          <Chip text="Late" cls={LATE_CLS} />
-                        </>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">{r.in ? timeOf(r.in) : "-"}</td>
-                    <td className="px-3 py-2.5">
-                      {r.out ? (
-                        timeOf(r.out)
-                      ) : r.in ? (
-                        isToday ? (
-                          <span className="text-[#00664E]">In progress</span>
-                        ) : (
-                          <span className="text-[#B54708]">No clock-out</span>
-                        )
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium">{hoursText(r.hours)}</td>
-                    <td className="px-3 py-2.5 text-[#667085]">
-                      {sourceLabel(r.source)}
-                      {r.verified ? " (passkey)" : ""}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2.5 text-right print:hidden">
-                      <button className={`${BTN} px-3 py-1.5`} onClick={() => setEditing(r)}>
-                        Correct
-                      </button>{" "}
-                      <button className={`${BTN} px-3 py-1.5`} onClick={() => setHistory(r)}>
-                        History
-                      </button>{" "}
-                      <button className={`${BTN} px-3 py-1.5`} onClick={() => setPhones(r)}>
-                        Phones
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {!loading && hasAnything && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+            <span className="font-semibold text-[#0B2B24]">{fullDate(date)}</span>
+            <span>Present {filtered.length}</span>
+            <span>Late {late}</span>
+            <span>On leave {count("leave")}</span>
+            <span>Away on duty {count("away")}</span>
+            <span>Remote {count("remote")}</span>
+            <span>Absent {count("absent")}</span>
           </div>
+        )}
+        {loading ? (
+          <Loading />
+        ) : !hasAnything ? (
+          <Empty
+            icon={Users}
+            title={`No attendance recorded on ${fullDate(date)}`}
+            hint="Pick another date, or add a record if someone forgot to clock in."
+          />
+        ) : (
+          <>
+            {filtered.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] border-collapse text-sm">
+                  <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+                    <tr>
+                      <th className={TH}>Name</th>
+                      <th className={TH}>Clock in</th>
+                      <th className={TH}>Clock out</th>
+                      <th className={TH}>Hours</th>
+                      <th className={TH}>Source</th>
+                      <th className={`${TH} print:hidden`} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((r) => (
+                      <tr key={r.userId} className={ROW}>
+                        <td className={TD}>
+                          <span className="flex items-center gap-3">
+                            <Avatar name={r.userName || r.userId} />
+                            <span className="inline-flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{r.userName || r.userId}</span>
+                              {r.late && <Chip text="Late" cls={LATE_CLS} />}
+                            </span>
+                          </span>
+                        </td>
+                        <td className={`${TD} tabular-nums`}>{r.in ? timeOf(r.in) : "-"}</td>
+                        <td className={`${TD} tabular-nums`}>
+                          {r.out ? (
+                            timeOf(r.out)
+                          ) : r.in ? (
+                            isToday ? (
+                              <span className="text-[#00664E]">In progress</span>
+                            ) : (
+                              <span className="text-[#B54708]">No clock-out</span>
+                            )
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td className={`${TD} font-medium tabular-nums`}>{hoursText(r.hours)}</td>
+                        <td className={`${TD} text-[#667085]`}>
+                          {sourceLabel(r.source)}
+                          {r.verified ? " (passkey)" : ""}
+                        </td>
+                        <td className={`${TD} whitespace-nowrap text-right print:hidden`}>
+                          <span className="inline-flex gap-1.5">
+                            <button className={BTN_SM} onClick={() => setEditing(r)}>
+                              Correct
+                            </button>
+                            <button className={BTN_SM} onClick={() => setHistory(r)}>
+                              History
+                            </button>
+                            <button className={BTN_SM} onClick={() => setPhones(r)}>
+                              Phones
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {others.length > 0 && (
+              <div className={`overflow-x-auto print:break-inside-avoid ${filtered.length > 0 ? "border-t border-[#E3E8E5]" : ""}`}>
+                <h3 className="bg-[#F9FAFA] px-5 py-3 text-sm font-semibold">Not clocked in on {fullDate(date)}</h3>
+                <table className="w-full min-w-[640px] border-collapse text-sm">
+                  <thead className="border-y border-[#E3E8E5]">
+                    <tr>
+                      <th className={TH}>Name</th>
+                      <th className={TH}>Status</th>
+                      <th className={TH}>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {others.map((p) => (
+                      <tr key={`${p.userId}|${p.state}`} className={ROW}>
+                        <td className={TD}>
+                          <span className="flex items-center gap-3">
+                            <Avatar name={p.userName || p.userId} />
+                            <span className="font-medium">{p.userName || p.userId}</span>
+                          </span>
+                        </td>
+                        <td className={TD}>
+                          <Chip text={STATE_TAG[p.state]?.text || p.state} cls={STATE_TAG[p.state]?.cls || STATE_TAG.away.cls} />
+                        </td>
+                        <td className={`${TD} capitalize text-[#667085]`}>{p.note || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {absent.length > 0 && (
+                  <p className="border-t border-[#EEF1F0] px-5 py-3 text-xs text-[#667085]">
+                    Absent means someone who clocked in during the last 30 days and has no clock record, leave, trip or
+                    remote day on this date.
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ---------- team report (administrator): one line per person for a month or a year ---------- */
+
+function TeamReport() {
+  const [period, setPeriod] = useState("month");
+  const [q, setQ] = useState("");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const { from, to } = periodDays(period);
+
+  useEffect(() => {
+    let on = true;
+    setData(null);
+    setError("");
+    getReport({ from, to })
+      .then((r) => on && setData(r))
+      .catch((e) => on && setError(e.message));
+    return () => {
+      on = false;
+    };
+  }, [from, to]);
+
+  const people = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const all = data?.people || [];
+    return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
+  }, [data, q]);
+
+  const totals = useMemo(
+    () =>
+      people.reduce(
+        (t, p) => ({
+          present: t.present + p.present,
+          late: t.late + p.late,
+          absent: t.absent + p.absent,
+          leave: t.leave + p.leave,
+          away: t.away + p.away,
+          remote: t.remote + p.remote,
+          hours: t.hours + p.hours,
+        }),
+        { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 }
+      ),
+    [people]
+  );
+
+  const periodText = data ? `${fullDate(data.from)} to ${fullDate(data.to)}` : "";
+
+  function onCsv() {
+    downloadCsv(
+      ["Name", "User ID", "Days present", "Late", "Absent", "On leave", "Away on duty", "Remote", "Hours worked"],
+      [
+        ...people.map((p) => [p.userName, p.userId, p.present, p.late, p.absent, p.leave, p.away, p.remote, p.hours]),
+        ["Total", "", totals.present, totals.late, totals.absent, totals.leave, totals.away, totals.remote, Math.round(totals.hours * 100) / 100],
+      ],
+      `attendance-report-${data.from}-to-${data.to}`
+    );
+  }
+
+  const num = `${TD} text-right tabular-nums`;
+  const numHead = `${TH} text-right`;
+
+  return (
+    <>
+      {error && <Banner msg={{ ok: false, text: error }} />}
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#E3E8E5] bg-white p-3 shadow-[0_1px_2px_rgba(11,43,36,0.04)] print:hidden">
+        <PeriodSelect value={period} onChange={setPeriod} />
+        <div className="relative">
+          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
+          <input
+            type="search"
+            className={`${INPUT} w-56 pl-9`}
+            placeholder="Search by name"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search by name"
+          />
+        </div>
+        <span className="flex-1" />
+        <button className={BTN} onClick={onCsv} disabled={!people.length}>
+          <Download size={16} /> Download CSV
+        </button>
+        <button className={BTN} onClick={() => window.print()} disabled={!people.length}>
+          <Printer size={16} /> Print
+        </button>
+      </div>
+
+      <div id="attendance-print" className="mb-6 overflow-hidden rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+        <PrintHeader title="Attendance report" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={periodText} />
+        {!data && !error ? (
+          <Loading />
+        ) : !data ? null : people.length === 0 ? (
+          <Empty icon={Users} title="No attendance in this period" hint="Pick another month or year." />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+              <span className="font-semibold text-[#0B2B24]">{periodText}</span>
+              <span>Working days {data.workingDays}</span>
+              <span>{plural(people.length, "person")}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] border-collapse text-sm">
+                <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+                  <tr>
+                    <th className={TH}>Name</th>
+                    <th className={numHead}>Present</th>
+                    <th className={numHead}>Late</th>
+                    <th className={numHead}>Absent</th>
+                    <th className={numHead}>On leave</th>
+                    <th className={numHead}>Away on duty</th>
+                    <th className={numHead}>Remote</th>
+                    <th className={numHead}>Hours worked</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {people.map((p) => (
+                    <tr key={p.userId} className={ROW}>
+                      <td className={TD}>
+                        <span className="flex items-center gap-3">
+                          <Avatar name={p.userName || p.userId} />
+                          <span className="font-medium">{p.userName || p.userId}</span>
+                        </span>
+                      </td>
+                      <td className={num}>{p.present}</td>
+                      <td className={num}>{p.late}</td>
+                      <td className={num}>{p.absent}</td>
+                      <td className={num}>{p.leave}</td>
+                      <td className={num}>{p.away}</td>
+                      <td className={num}>{p.remote}</td>
+                      <td className={`${num} font-medium`}>{hoursText(p.hours)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-[#E3E8E5] bg-[#F9FAFA] font-semibold">
+                    <td className={TD}>Total</td>
+                    <td className={num}>{totals.present}</td>
+                    <td className={num}>{totals.late}</td>
+                    <td className={num}>{totals.absent}</td>
+                    <td className={num}>{totals.leave}</td>
+                    <td className={num}>{totals.away}</td>
+                    <td className={num}>{totals.remote}</td>
+                    <td className={num}>{hoursText(totals.hours)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="border-t border-[#EEF1F0] px-5 py-3 text-xs text-[#667085]">
+              Counts are in days, working days only (weekdays that are not public holidays), up to today. Absent means a
+              working day with no clock record, leave, trip or remote day. A person is counted from the first day they
+              appear in the period.
+            </p>
+          </>
         )}
       </div>
     </>
@@ -1319,6 +1850,7 @@ function ClockingSettings() {
   }, []);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const flag = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
   async function onSave(e) {
     e.preventDefault();
@@ -1344,87 +1876,78 @@ function ClockingSettings() {
   }
 
   return (
-    <section className={`${CARD} mb-6`}>
-      <h3 className="font-medium">Clocking settings</h3>
-      <p className="mt-1 text-sm text-[#667085]">
-        Staff can clock in from a phone or laptop only when this is switched on and they are connected to the office
-        network. Otherwise they use the office scanner.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
+    <Panel
+      title="Clocking settings"
+      description="Staff can clock in from a phone or laptop only when this is switched on and they are connected to the office network. Otherwise they use the office scanner."
+    >
+      <Banner msg={msg} />
       {!form ? (
         !msg && <p className="text-sm text-[#667085]">Loading...</p>
       ) : (
-        <form className="space-y-4" onSubmit={onSave}>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-[#008060]"
+        <form onSubmit={onSave}>
+          <div className="divide-y divide-[#EEF1F0] border-y border-[#EEF1F0]">
+            <Toggle
               checked={form.phoneClocking}
-              onChange={(e) => setForm((f) => ({ ...f, phoneClocking: e.target.checked }))}
+              onChange={flag("phoneClocking")}
+              label="Allow clocking in from phones and laptops"
+              hint="When off, staff can only clock in at the office scanner."
             />
-            Allow clocking in from phones and laptops
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-[#008060]"
+            <Toggle
               checked={form.requirePasskey}
-              onChange={(e) => setForm((f) => ({ ...f, requirePasskey: e.target.checked }))}
+              onChange={flag("requirePasskey")}
+              label="Require fingerprint, face or PIN on a registered phone"
+              hint="Stops one person clocking in for another."
             />
-            Require fingerprint, face or PIN on a registered phone
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-[#008060]"
+            <Toggle
               checked={form.requireQr}
-              onChange={(e) => setForm((f) => ({ ...f, requireQr: e.target.checked }))}
+              onChange={flag("requireQr")}
+              label="Require scanning the printed QR code"
+              hint="Staff must scan the poster at the office before the Clock in button works."
             />
-            Require scanning the printed QR code
-          </label>
-          <label className="block text-xs text-[#667085]">
-            Office network addresses (one per line)
-            <textarea
-              className={`${INPUT} mt-1 block w-full max-w-md font-mono`}
-              rows={4}
-              value={form.ips}
-              onChange={set("ips")}
-              placeholder={"41.80.10.25\n41.80.10.0/24"}
-            />
-            <span className="mt-1 block">
-              Use the office&apos;s public IP address (open a &quot;what is my IP&quot; page while on the office
-              Wi-Fi), or a range such as 41.80.10.0/24. If the office also has an IPv6 address, add it too.
-            </span>
-          </label>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="text-xs text-[#667085]">
-              Work starts
-              <input type="time" className={`${INPUT} mt-1 block`} value={form.workStart} onChange={set("workStart")} />
-            </label>
-            <label className="text-xs text-[#667085]">
-              Work ends
-              <input type="time" className={`${INPUT} mt-1 block`} value={form.workEnd} onChange={set("workEnd")} />
-            </label>
-            <label className="text-xs text-[#667085]">
-              Grace period (minutes)
-              <input
-                type="number"
-                min="0"
-                max="120"
-                className={`${INPUT} mt-1 block w-28`}
-                value={form.graceMinutes}
-                onChange={set("graceMinutes")}
-              />
-            </label>
           </div>
-          <button className={BTN_PRIMARY} disabled={busy}>
-            {busy ? "Saving..." : "Save settings"}
-          </button>
+
+          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <Field label="Office network addresses (one per line)">
+              <textarea
+                className={`${INPUT} mt-1.5 block h-auto w-full py-2 font-mono`}
+                rows={4}
+                value={form.ips}
+                onChange={set("ips")}
+                placeholder={"41.80.10.25\n41.80.10.0/24"}
+              />
+              <span className="mt-1.5 block font-normal leading-relaxed text-[#667085]">
+                Use the office&apos;s public IP address (open a &quot;what is my IP&quot; page while on the office
+                Wi-Fi), or a range such as 41.80.10.0/24. If the office also has an IPv6 address, add it too.
+              </span>
+            </Field>
+            <div className="flex flex-wrap content-start gap-4">
+              <Field label="Work starts">
+                <input type="time" className={`${INPUT} mt-1.5 block`} value={form.workStart} onChange={set("workStart")} />
+              </Field>
+              <Field label="Work ends">
+                <input type="time" className={`${INPUT} mt-1.5 block`} value={form.workEnd} onChange={set("workEnd")} />
+              </Field>
+              <Field label="Grace period (minutes)">
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  className={`${INPUT} mt-1.5 block w-32`}
+                  value={form.graceMinutes}
+                  onChange={set("graceMinutes")}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end border-t border-[#EEF1F0] pt-4">
+            <button className={BTN_PRIMARY} disabled={busy}>
+              {busy ? "Saving..." : "Save settings"}
+            </button>
+          </div>
         </form>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -1474,9 +1997,10 @@ function HolidaySettings() {
   }
 
   return (
-    <section className={CARD}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-medium">Public holidays</h3>
+    <Panel
+      title="Public holidays"
+      description="Holidays are not counted as absences in attendance records."
+      actions={
         <select className={INPUT} value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="Year">
           {[thisYear - 1, thisYear, thisYear + 1].map((y) => (
             <option key={y} value={y}>
@@ -1484,36 +2008,30 @@ function HolidaySettings() {
             </option>
           ))}
         </select>
-      </div>
-      <p className="mt-1 text-sm text-[#667085]">
-        Holidays are not counted as absences in attendance records.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
-      <form className="flex flex-wrap items-end gap-3" onSubmit={onAdd}>
-        <label className="text-xs text-[#667085]">
-          Date
+      }
+    >
+      <Banner msg={msg} />
+      <form className="flex flex-wrap items-end gap-3 rounded-lg bg-[#F6F8F7] p-4" onSubmit={onAdd}>
+        <Field label="Date">
           <input
             type="date"
-            className={`${INPUT} mt-1 block`}
+            className={`${INPUT} mt-1.5 block`}
             value={form.date}
             onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
             required
           />
-        </label>
-        <label className="text-xs text-[#667085]">
-          Name
+        </Field>
+        <Field label="Name">
           <input
-            className={`${INPUT} mt-1 block w-64`}
+            className={`${INPUT} mt-1.5 block w-64`}
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             maxLength={120}
             required
           />
-        </label>
+        </Field>
         <button className={BTN_PRIMARY} disabled={busy}>
-          Add holiday
+          <Plus size={16} /> Add holiday
         </button>
       </form>
 
@@ -1522,13 +2040,13 @@ function HolidaySettings() {
       ) : items.length === 0 ? (
         <p className="mt-4 text-sm text-[#667085]">No holidays added for {year}.</p>
       ) : (
-        <ul className="mt-4 divide-y divide-[#EEF1F0]">
+        <ul className="mt-3 divide-y divide-[#EEF1F0]">
           {items.map((h) => (
             <li key={h.date} className="flex items-center gap-3 py-2.5 text-sm">
-              <span className="w-32 shrink-0 text-[#667085]">{fullDate(h.date)}</span>
+              <span className="w-32 shrink-0 tabular-nums text-[#667085]">{fullDate(h.date)}</span>
               <span className="flex-1 font-medium">{h.name}</span>
               <button
-                className={`rounded-full p-2 text-[#667085] hover:bg-[#F1F3F2] hover:text-[#B42318] ${FOCUS}`}
+                className={`rounded-full p-2 text-[#667085] transition hover:bg-[#FEF3F2] hover:text-[#B42318] motion-reduce:transition-none ${FOCUS}`}
                 aria-label={`Remove ${h.name}`}
                 onClick={() => onRemove(h)}
               >
@@ -1538,7 +2056,7 @@ function HolidaySettings() {
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -1639,24 +2157,29 @@ function ImportFile() {
   );
 
   return (
-    <section className={CARD}>
-      <h3 className="font-medium">Import from a scanner file</h3>
-      <p className="mt-1 text-sm text-[#667085]">
-        Punches normally arrive from the scanner by themselves. Use this only as a backup, for example to load a USB
-        export after the scanner was offline for days. Times are read as Nairobi time. For each person and day, the
-        earliest punch becomes the clock in and the latest becomes the clock out. Re-uploading a file is safe. The ID
-        column must hold each person&apos;s portal user ID, otherwise their punches won&apos;t appear in their own
-        attendance.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
+    <Panel
+      title="Import from a scanner file"
+      description="Punches normally arrive from the scanner by themselves. Use this only as a backup, for example to load a USB export after the scanner was offline for days. Times are read as Nairobi time. For each person and day, the earliest punch becomes the clock in and the latest becomes the clock out. Re-uploading a file is safe. The ID column must hold each person's portal user ID, otherwise their punches won't appear in their own attendance."
+    >
+      <Banner msg={msg} />
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-[#B8C2BD] bg-[#FAFBFA] p-4">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#E3F3EC] text-[#00664E]">
+          <Upload size={18} />
+        </span>
+        <input
+          type="file"
+          accept=".csv,.txt,.dat,.tsv"
+          onChange={onFile}
+          className={`text-sm text-[#475467] file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[#008060] file:px-3.5 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-[#00664E] ${FOCUS}`}
+          aria-label="Scanner export file"
+        />
+        <span className="text-xs text-[#667085]">CSV, TSV, TXT or DAT</span>
       </div>
-      <input type="file" accept=".csv,.txt,.dat,.tsv" onChange={onFile} className="text-sm" aria-label="Scanner export file" />
 
       {rows.length > 0 && (
-        <div className="mt-4">
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-2">
+        <div className="mt-5">
+          <div className="flex flex-wrap items-end gap-4 text-sm">
+            <label className="flex h-9 items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={hasHeader}
@@ -1665,51 +2188,64 @@ function ImportFile() {
               />
               First row is headings
             </label>
-            <label className="flex items-center gap-2">
-              User ID
-              <select className={INPUT} value={idCol} onChange={(e) => setIdCol(Number(e.target.value))}>
+            <Field label="User ID">
+              <select className={`${INPUT} mt-1.5 block`} value={idCol} onChange={(e) => setIdCol(Number(e.target.value))}>
                 {options()}
               </select>
-            </label>
-            <label className="flex items-center gap-2">
-              Name
-              <select className={INPUT} value={nameCol} onChange={(e) => setNameCol(Number(e.target.value))}>
+            </Field>
+            <Field label="Name">
+              <select className={`${INPUT} mt-1.5 block`} value={nameCol} onChange={(e) => setNameCol(Number(e.target.value))}>
                 {options(<option value={-1}>None</option>)}
               </select>
-            </label>
-            <label className="flex items-center gap-2">
-              Date and time
-              <select className={INPUT} value={timeCol} onChange={(e) => setTimeCol(Number(e.target.value))}>
+            </Field>
+            <Field label="Date and time">
+              <select className={`${INPUT} mt-1.5 block`} value={timeCol} onChange={(e) => setTimeCol(Number(e.target.value))}>
                 {options()}
               </select>
-            </label>
+            </Field>
           </div>
 
-          <div className="mt-3 overflow-x-auto rounded-lg border border-[#E6ECE9]">
-            <table className="w-full text-xs">
+          <div className="mt-4 overflow-x-auto rounded-lg border border-[#E3E8E5]">
+            <table className="w-full text-sm">
+              <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+                <tr>
+                  <th className={TH}>User ID</th>
+                  <th className={TH}>Date and time</th>
+                  <th className={TH}>Check</th>
+                </tr>
+              </thead>
               <tbody>
-                {body.slice(0, 5).map((r, i) => (
-                  <tr key={i} className="border-b border-[#EEF1F0] last:border-0">
-                    <td className="px-3 py-1.5">{r[idCol]}</td>
-                    <td className="px-3 py-1.5">{r[timeCol]}</td>
-                    <td className="px-3 py-1.5 text-[#667085]">
-                      {parseWhen(r[timeCol] || "") ? "OK" : "Can't read this time"}
-                    </td>
-                  </tr>
-                ))}
+                {body.slice(0, 5).map((r, i) => {
+                  const ok = !!parseWhen(r[timeCol] || "");
+                  return (
+                    <tr key={i} className={ROW}>
+                      <td className="px-4 py-2 tabular-nums">{r[idCol]}</td>
+                      <td className="px-4 py-2 tabular-nums">{r[timeCol]}</td>
+                      <td className="px-4 py-2">
+                        <Chip
+                          text={ok ? "OK" : "Can't read this time"}
+                          cls={ok ? "bg-[#E3F3EC] text-[#00664E]" : "bg-[#FDECEA] text-[#8A1C14]"}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          <p className="mt-2 text-sm text-[#475467]">
-            {punches.length} punches ready{skipped > 0 ? `, ${skipped} rows can't be read and will be skipped` : ""}.
-          </p>
-          <button className={`${BTN_PRIMARY} mt-3`} onClick={onImport} disabled={busy || !punches.length}>
-            {busy ? "Importing..." : `Import ${punches.length} punches`}
-          </button>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[#EEF1F0] pt-4">
+            <p className="text-sm text-[#475467]">
+              <span className="font-semibold text-[#0B2B24]">{punches.length}</span> punches ready
+              {skipped > 0 ? `, ${skipped} rows can't be read and will be skipped` : ""}.
+            </p>
+            <button className={BTN_PRIMARY} onClick={onImport} disabled={busy || !punches.length}>
+              {busy ? "Importing..." : `Import ${punches.length} punches`}
+            </button>
+          </div>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -1772,48 +2308,43 @@ function LeaveRequestForm({ onSent }) {
   }
 
   return (
-    <section className={`${CARD} mb-6`}>
-      <h3 className="font-medium">Request leave</h3>
-      <p className="mt-1 text-sm text-[#667085]">
-        An administrator or the CEO will approve or decline it. Weekends and public holidays are not counted.
-      </p>
-      <div className="mt-3">
-        <Banner msg={msg} />
-      </div>
+    <Panel
+      title="Request leave"
+      description="An administrator or the CEO will approve or decline it. Weekends and public holidays are not counted."
+    >
+      <Banner msg={msg} />
       <form className="flex flex-wrap items-end gap-3" onSubmit={onSubmit}>
-        <label className="text-xs text-[#667085]">
-          Type
-          <select className={`${INPUT} mt-1 block`} value={form.type} onChange={set("type")}>
+        <Field label="Type">
+          <select className={`${INPUT} mt-1.5 block`} value={form.type} onChange={set("type")}>
             {LEAVE_TYPES.map((t) => (
               <option key={t} value={t}>
                 {t}
               </option>
             ))}
           </select>
-        </label>
-        <label className="text-xs text-[#667085]">
-          From
-          <input type="date" className={`${INPUT} mt-1 block`} value={form.from} onChange={set("from")} required />
-        </label>
-        <label className="text-xs text-[#667085]">
-          To
-          <input type="date" className={`${INPUT} mt-1 block`} value={form.to} onChange={set("to")} required />
-        </label>
-        <label className="min-w-[200px] flex-1 text-xs text-[#667085]">
-          Reason (optional)
-          <input className={`${INPUT} mt-1 block w-full`} value={form.reason} onChange={set("reason")} maxLength={300} />
-        </label>
+        </Field>
+        <Field label="From">
+          <input type="date" className={`${INPUT} mt-1.5 block`} value={form.from} onChange={set("from")} required />
+        </Field>
+        <Field label="To">
+          <input type="date" className={`${INPUT} mt-1.5 block`} value={form.to} onChange={set("to")} required />
+        </Field>
+        <Field label="Reason (optional)" className="min-w-[200px] flex-1">
+          <input className={`${INPUT} mt-1.5 block w-full`} value={form.reason} onChange={set("reason")} maxLength={300} />
+        </Field>
         <button className={BTN_PRIMARY} disabled={busy || backwards || !form.from || !form.to}>
           {busy ? "Sending..." : "Send request"}
         </button>
       </form>
-      {backwards && <p className="mt-2 text-sm text-[#8A1C14]">The end date is before the start date.</p>}
+      {backwards && <p className="mt-3 text-sm text-[#8A1C14]">The end date is before the start date.</p>}
       {!backwards && form.from && form.to && (
-        <p className="mt-2 text-sm text-[#475467]">
-          {dateRange(form.from, form.to)}: {plural(days, "working day")}
+        <p className="mt-3 inline-flex items-center gap-2 rounded-lg bg-[#F6F8F7] px-3 py-2 text-sm text-[#475467]">
+          <CalendarDays size={15} />
+          {dateRange(form.from, form.to)}:{" "}
+          <span className="font-semibold text-[#0B2B24]">{plural(days, "working day")}</span>
         </p>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -1847,21 +2378,20 @@ function MyLeaveRequests({ tick, onChange }) {
   const rows = [...(items || [])].sort((a, b) => b.from.localeCompare(a.from));
 
   return (
-    <section className={`${CARD} mb-6`}>
-      <h3 className="font-medium">My leave requests</h3>
+    <Panel title="My leave requests" flush>
       {msg && (
-        <div className="mt-3">
+        <div className="p-5 pb-0">
           <Banner msg={msg} />
         </div>
       )}
       {!items ? (
-        <p className="mt-3 text-sm text-[#667085]">Loading...</p>
+        <Loading />
       ) : rows.length === 0 ? (
-        <p className="mt-3 text-sm text-[#667085]">You haven&apos;t asked for leave yet.</p>
+        <Empty title="No leave requests yet" hint="When you ask for leave, it shows up here with its decision." />
       ) : (
-        <div className="mt-3 overflow-x-auto">
+        <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] border-collapse text-sm">
-            <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
               <tr>
                 <th className={TH}>Type</th>
                 <th className={TH}>Dates</th>
@@ -1875,20 +2405,20 @@ function MyLeaveRequests({ tick, onChange }) {
               {rows.map((r) => {
                 const tag = LEAVE_STATUS_TAG[r.status] || LEAVE_STATUS_TAG.pending;
                 return (
-                  <tr key={r.id} className="border-b border-[#EEF1F0] last:border-0">
-                    <td className="px-3 py-2.5 font-medium">{r.type}</td>
-                    <td className="whitespace-nowrap px-3 py-2.5">{dateRange(r.from, r.to)}</td>
-                    <td className="px-3 py-2.5">{r.days ?? workingDays(r.from, r.to)}</td>
-                    <td className="px-3 py-2.5">
+                  <tr key={r.id} className={ROW}>
+                    <td className={`${TD} font-medium`}>{r.type}</td>
+                    <td className={`${TD} whitespace-nowrap`}>{dateRange(r.from, r.to)}</td>
+                    <td className={`${TD} tabular-nums`}>{r.days ?? workingDays(r.from, r.to)}</td>
+                    <td className={TD}>
                       <Chip {...tag} />
                       {r.decidedBy && r.status !== "pending" && (
-                        <span className="mt-0.5 block text-xs text-[#667085]">by {r.decidedBy}</span>
+                        <span className="mt-1 block text-xs text-[#667085]">by {r.decidedBy}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-[#667085]">{r.decisionNote || "-"}</td>
-                    <td className="px-3 py-2.5 text-right">
+                    <td className={`${TD} text-[#667085]`}>{r.decisionNote || "-"}</td>
+                    <td className={`${TD} text-right`}>
                       {canCancel(r) && (
-                        <button className={`${BTN} px-3 py-1.5`} onClick={() => onCancel(r)}>
+                        <button className={BTN_SM} onClick={() => onCancel(r)}>
                           Cancel
                         </button>
                       )}
@@ -1900,7 +2430,7 @@ function MyLeaveRequests({ tick, onChange }) {
           </table>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -1942,24 +2472,28 @@ function LeaveApprovals({ tick, onChange }) {
   const rows = [...(items || [])].sort((a, b) => a.from.localeCompare(b.from));
 
   return (
-    <section className={`${CARD} mb-6`}>
-      <div className="flex items-center gap-2">
-        <h3 className="font-medium">Waiting for your approval</h3>
-        {rows.length > 0 && <Chip text={String(rows.length)} cls="bg-[#FFF4E5] text-[#8A4B00]" />}
-      </div>
+    <Panel
+      flush
+      title={
+        <span className="inline-flex items-center gap-2">
+          Waiting for your approval
+          {rows.length > 0 && <Chip text={String(rows.length)} cls="bg-[#FFF4E5] text-[#8A4B00]" dot={false} />}
+        </span>
+      }
+    >
       {msg && (
-        <div className="mt-3">
+        <div className="p-5 pb-0">
           <Banner msg={msg} />
         </div>
       )}
       {!items ? (
-        <p className="mt-3 text-sm text-[#667085]">Loading...</p>
+        <Loading />
       ) : rows.length === 0 ? (
-        <p className="mt-3 text-sm text-[#667085]">No requests are waiting.</p>
+        <Empty title="Nothing to approve" hint="New leave requests will appear here." />
       ) : (
-        <div className="mt-3 overflow-x-auto">
+        <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] border-collapse text-sm">
-            <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
               <tr>
                 <th className={TH}>Name</th>
                 <th className={TH}>Type</th>
@@ -1971,27 +2505,26 @@ function LeaveApprovals({ tick, onChange }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} className="border-b border-[#EEF1F0] last:border-0">
-                  <td className="px-3 py-2.5 font-medium">{r.name}</td>
-                  <td className="px-3 py-2.5">{r.type}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5">{dateRange(r.from, r.to)}</td>
-                  <td className="px-3 py-2.5">{r.days ?? workingDays(r.from, r.to)}</td>
-                  <td className="px-3 py-2.5 text-[#667085]">{r.reason || "-"}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
-                    <button
-                      className={`${BTN_PRIMARY} px-3 py-1.5`}
-                      disabled={busyId === r.id}
-                      onClick={() => decide(r, "approved")}
-                    >
-                      Approve
-                    </button>{" "}
-                    <button
-                      className={`${BTN} px-3 py-1.5`}
-                      disabled={busyId === r.id}
-                      onClick={() => decide(r, "rejected")}
-                    >
-                      Decline
-                    </button>
+                <tr key={r.id} className={ROW}>
+                  <td className={TD}>
+                    <span className="flex items-center gap-3">
+                      <Avatar name={r.name} />
+                      <span className="font-medium">{r.name}</span>
+                    </span>
+                  </td>
+                  <td className={TD}>{r.type}</td>
+                  <td className={`${TD} whitespace-nowrap`}>{dateRange(r.from, r.to)}</td>
+                  <td className={`${TD} tabular-nums`}>{r.days ?? workingDays(r.from, r.to)}</td>
+                  <td className={`${TD} text-[#667085]`}>{r.reason || "-"}</td>
+                  <td className={`${TD} whitespace-nowrap text-right`}>
+                    <span className="inline-flex gap-1.5">
+                      <button className={BTN_SM_PRIMARY} disabled={busyId === r.id} onClick={() => decide(r, "approved")}>
+                        Approve
+                      </button>
+                      <button className={BTN_SM} disabled={busyId === r.id} onClick={() => decide(r, "rejected")}>
+                        Decline
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -1999,7 +2532,7 @@ function LeaveApprovals({ tick, onChange }) {
           </table>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -2040,32 +2573,36 @@ function WhoIsOnLeave({ tick }) {
       : { text: "Upcoming", cls: "bg-[#EEF4FF] text-[#2E5AAC]" };
 
   return (
-    <section className={`${CARD} mb-6`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <h3 className="font-medium">Who is on leave</h3>
+    <Panel
+      flush
+      title={
+        <span className="inline-flex items-center gap-2">
+          Who is on leave
           {view === "upcoming" && onNow > 0 && <Chip text={`${onNow} away now`} cls="bg-[#FFF4E5] text-[#8A4B00]" />}
-        </div>
+        </span>
+      }
+      actions={
         <select className={INPUT} value={view} onChange={(e) => setView(e.target.value)} aria-label="Show leave">
           <option value="upcoming">Now and the next 90 days</option>
           <option value="past">Past 90 days</option>
         </select>
-      </div>
+      }
+    >
       {error && (
-        <div className="mt-3">
+        <div className="p-5 pb-0">
           <Banner msg={{ ok: false, text: error }} />
         </div>
       )}
       {!items && !error ? (
-        <p className="mt-3 text-sm text-[#667085]">Loading...</p>
+        <Loading />
       ) : rows.length === 0 ? (
-        <p className="mt-3 text-sm text-[#667085]">
-          {view === "past" ? "Nobody was on leave in the past 90 days." : "Nobody is on leave in this period."}
-        </p>
+        <Empty
+          title={view === "past" ? "Nobody was on leave in the past 90 days" : "Nobody is on leave in this period"}
+        />
       ) : (
-        <div className="mt-3 overflow-x-auto">
+        <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-sm">
-            <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+            <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
               <tr>
                 <th className={TH}>Name</th>
                 {showType && <th className={TH}>Type</th>}
@@ -2076,12 +2613,17 @@ function WhoIsOnLeave({ tick }) {
             </thead>
             <tbody>
               {rows.map((l, i) => (
-                <tr key={`${l.userId}|${l.from}|${i}`} className="border-b border-[#EEF1F0] last:border-0">
-                  <td className="px-3 py-2.5 font-medium">{l.name}</td>
-                  {showType && <td className="px-3 py-2.5">{l.type || "-"}</td>}
-                  <td className="whitespace-nowrap px-3 py-2.5">{dateRange(l.from, l.to)}</td>
-                  <td className="px-3 py-2.5">{workingDays(l.from, l.to)}</td>
-                  <td className="px-3 py-2.5 text-right">
+                <tr key={`${l.userId}|${l.from}|${i}`} className={ROW}>
+                  <td className={TD}>
+                    <span className="flex items-center gap-3">
+                      <Avatar name={l.name} />
+                      <span className="font-medium">{l.name}</span>
+                    </span>
+                  </td>
+                  {showType && <td className={TD}>{l.type || "-"}</td>}
+                  <td className={`${TD} whitespace-nowrap`}>{dateRange(l.from, l.to)}</td>
+                  <td className={`${TD} tabular-nums`}>{workingDays(l.from, l.to)}</td>
+                  <td className={`${TD} text-right`}>
                     <Chip {...stateOf(l)} />
                   </td>
                 </tr>
@@ -2090,6 +2632,142 @@ function WhoIsOnLeave({ tick }) {
           </table>
         </div>
       )}
+    </Panel>
+  );
+}
+
+// Approved leave for a month or a year, for printing. Everyone can see who was away; the administrator also sees the type.
+function LeaveReport({ tick }) {
+  const [period, setPeriod] = useState("month");
+  const [items, setItems] = useState(null);
+  const [error, setError] = useState("");
+  const { from, to } = periodDays(period);
+
+  useEffect(() => {
+    let on = true;
+    setItems(null);
+    setError("");
+    listLeave({ scope: "all", from, to })
+      .then((r) => on && setItems(r))
+      .catch((e) => on && setError(e.message));
+    return () => {
+      on = false;
+    };
+  }, [from, to, tick]);
+
+  // Working days that fall inside the chosen period (leave can start before it or end after it)
+  const rows = useMemo(
+    () =>
+      (items || [])
+        .map((l) => ({ ...l, inPeriod: workingDays(l.from < from ? from : l.from, l.to > to ? to : l.to) }))
+        .filter((l) => l.inPeriod > 0)
+        .sort((a, b) => a.from.localeCompare(b.from) || a.name.localeCompare(b.name)),
+    [items, from, to]
+  );
+  const perPerson = useMemo(() => {
+    const m = new Map();
+    for (const r of rows) {
+      const p = m.get(r.userId) || { userId: r.userId, name: r.name, days: 0, spells: 0 };
+      p.days += r.inPeriod;
+      p.spells += 1;
+      m.set(r.userId, p);
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+  const totalDays = rows.reduce((s, r) => s + r.inPeriod, 0);
+  const showType = rows.some((l) => l.type);
+  const periodText = `${fullDate(from)} to ${fullDate(to)}`;
+
+  function onCsv() {
+    downloadCsv(
+      ["Name", "Type", "From", "To", "Working days in period"],
+      rows.map((r) => [r.name, r.type || "", r.from, r.to, r.inPeriod]),
+      `leave-report-${from}-to-${to}`
+    );
+  }
+
+  return (
+    <section id="attendance-print" className="mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
+        <div>
+          <h3 className="text-base font-semibold">Leave report</h3>
+          <p className="mt-0.5 text-sm text-[#667085]">Approved leave in a month or a year. Weekends and public holidays are not counted.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <PeriodSelect value={period} onChange={setPeriod} future />
+          <button className={BTN} onClick={onCsv} disabled={!rows.length}>
+            <Download size={16} /> Download CSV
+          </button>
+          <button className={BTN} onClick={() => window.print()} disabled={!rows.length}>
+            <Printer size={16} /> Print
+          </button>
+        </div>
+      </div>
+      <PrintHeader title="Leave report" subtitle="Approved leave" period={periodText} />
+      {error && (
+        <div className="p-5 pb-0">
+          <Banner msg={{ ok: false, text: error }} />
+        </div>
+      )}
+      {!items && !error ? (
+        <Loading />
+      ) : items && rows.length === 0 ? (
+        <Empty title="No leave in this period" hint="Pick another month or year." />
+      ) : items ? (
+        <>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+            <span className="font-semibold text-[#0B2B24]">{periodText}</span>
+            <span>{plural(perPerson.length, "person")}</span>
+            <span>{plural(totalDays, "leave day")}</span>
+          </div>
+
+          <h4 className="px-5 pt-4 text-sm font-semibold">Days per person</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[420px] border-collapse text-sm">
+              <thead className="border-b border-[#E3E8E5]">
+                <tr>
+                  <th className={TH}>Name</th>
+                  <th className={`${TH} text-right`}>Periods of leave</th>
+                  <th className={`${TH} text-right`}>Working days</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perPerson.map((p) => (
+                  <tr key={p.userId} className={ROW}>
+                    <td className={`${TD} font-medium`}>{p.name}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{p.spells}</td>
+                    <td className={`${TD} text-right font-medium tabular-nums`}>{p.days}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <h4 className="px-5 pt-5 text-sm font-semibold">All leave in the period</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
+              <thead className="border-b border-[#E3E8E5]">
+                <tr>
+                  <th className={TH}>Name</th>
+                  {showType && <th className={TH}>Type</th>}
+                  <th className={TH}>Dates</th>
+                  <th className={`${TH} text-right`}>Days in period</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((l, i) => (
+                  <tr key={`${l.userId}|${l.from}|${i}`} className={ROW}>
+                    <td className={`${TD} font-medium`}>{l.name}</td>
+                    {showType && <td className={TD}>{l.type || "-"}</td>}
+                    <td className={`${TD} whitespace-nowrap`}>{dateRange(l.from, l.to)}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{l.inPeriod}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -2104,6 +2782,7 @@ function LeavePanel({ canApprove }) {
       <LeaveRequestForm onSent={refresh} />
       <MyLeaveRequests tick={tick} onChange={refresh} />
       <WhoIsOnLeave tick={tick} />
+      <LeaveReport tick={tick} />
       <RemotePanel canApprove={canApprove} />
     </>
   );
@@ -2128,55 +2807,63 @@ export default function Attendance() {
   // Administrators and the CEO approve leave. If getAccess() returns canApproveLeave, that wins.
   const canApprove = access.canApproveLeave ?? !!access.isAdmin;
 
-  const tabBtn = (key, label) => (
+  const tabBtn = (key, label, Icon) => (
     <button
       key={key}
       role="tab"
       aria-selected={tab === key}
       onClick={() => setTab(key)}
-      className={`-mb-px border-b-2 px-4 py-2 text-sm ${FOCUS} ${
+      className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors motion-reduce:transition-none ${FOCUS} ${
         tab === key
-          ? "border-[#008060] font-medium text-[#00664E]"
-          : "border-transparent text-[#667085] hover:text-[#0B2B24]"
+          ? "border-[#008060] font-semibold text-[#00664E]"
+          : "border-transparent font-medium text-[#667085] hover:border-[#C9D1CD] hover:text-[#0B2B24]"
       }`}
     >
+      <Icon size={16} />
       {label}
     </button>
   );
 
   return (
-    <div className="p-4 text-[#0B2B24] lg:p-6">
+    <div className="min-h-full bg-[#F6F8F7] p-4 text-[#0B2B24] lg:p-8">
       <style>{PRINT_CSS}</style>
 
-      <div className="mb-5">
-        <h2 className="text-2xl font-semibold">Attendance</h2>
-        <p className="text-sm text-[#667085]">
-          Clock in from the office network or at the office scanner. Times are in Nairobi time.
-        </p>
-      </div>
+      <div className="mx-auto max-w-[1200px]">
+        <div className="mb-6">
+          <h2 style={{ fontFamily: BRAND_FONT }} className="text-3xl font-semibold tracking-tight">
+            Attendance
+          </h2>
+          <p className="mt-1 text-sm text-[#667085]">
+            Clock in from the office network or at the office scanner. Times are in Nairobi time.
+          </p>
+        </div>
 
-      <div className="mb-5 flex overflow-x-auto border-b border-[#E6ECE9]" role="tablist">
-        {tabBtn("mine", "My attendance")}
-        {tabBtn("leave", "Leave")}
-        {access.isAdmin && tabBtn("team", "Team")}
-        {access.isAdmin && tabBtn("settings", "Settings")}
-        {access.isAdmin && tabBtn("qr", "QR poster")}
-        {access.isAdmin && tabBtn("scanner", "Scanner import")}
-      </div>
+        <div className="mb-6 flex overflow-x-auto border-b border-[#DDE3E0]" role="tablist">
+          {tabBtn("mine", "My attendance", Clock)}
+          {tabBtn("leave", "Leave", CalendarDays)}
+          {access.isAdmin && tabBtn("team", "Team", Users)}
+          {access.isAdmin && tabBtn("reports", "Reports", FileText)}
+          {access.isAdmin && tabBtn("settings", "Settings", Settings)}
+          {access.isAdmin && tabBtn("qr", "QR poster", QrCode)}
+          {access.isAdmin && tabBtn("scanner", "Scanner import", Upload)}
+        </div>
 
-      {tab === "leave" ? (
-        <LeavePanel canApprove={canApprove} />
-      ) : access.isAdmin && tab === "team" ? (
-        <TeamAttendance />
-      ) : access.isAdmin && tab === "settings" ? (
-        <SettingsPanel />
-      ) : access.isAdmin && tab === "qr" ? (
-        <QrScreen />
-      ) : access.isAdmin && tab === "scanner" ? (
-        <ImportFile />
-      ) : (
-        <MyAttendance />
-      )}
+        {tab === "leave" ? (
+          <LeavePanel canApprove={canApprove} />
+        ) : access.isAdmin && tab === "team" ? (
+          <TeamAttendance />
+        ) : access.isAdmin && tab === "reports" ? (
+          <TeamReport />
+        ) : access.isAdmin && tab === "settings" ? (
+          <SettingsPanel />
+        ) : access.isAdmin && tab === "qr" ? (
+          <QrScreen />
+        ) : access.isAdmin && tab === "scanner" ? (
+          <ImportFile />
+        ) : (
+          <MyAttendance />
+        )}
+      </div>
     </div>
   );
 }
