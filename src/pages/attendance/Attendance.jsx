@@ -44,6 +44,7 @@ import {
   decideLeave,
 } from "./attendanceApi";
 import { passkeysSupported, registerThisDevice, getAssertion } from "./passkeyClient";
+import ResetProject from "./ResetProject";
 import { SummaryCards, StatTile, ReportCharts, filterDays, METRICS } from "./attendanceStats";
 
 /* ---------- time helpers (all shown in Nairobi time) ---------- */
@@ -2114,6 +2115,7 @@ function SettingsPanel() {
     <>
       <ClockingSettings />
       <HolidaySettings />
+      <ResetProject />
     </>
   );
 }
