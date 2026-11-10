@@ -9,6 +9,7 @@ import {
   X,
   ChevronUp,
   ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import { listActivities, saveActivity, deleteActivity } from "./workplanApi";
 import { AuditTimeline } from "./AuditTrail";
@@ -20,6 +21,15 @@ const PRIORITIES = ["Low", "Medium", "High"];
 const PRIO_RANK = { Low: 0, Medium: 1, High: 2 };
 const PRIO_COLOR = { Low: "#98A2B3", Medium: "#E8870A", High: "#E5484D" };
 
+// The three sections AmplifyChange asks for in the workplan template
+const CATEGORIES = ["Project activities", "Monitoring and evaluation", "Organisational strengthening"];
+
+const GROUPINGS = [
+  ["none", "No grouping"],
+  ["project", "Group by project"],
+  ["category", "Group by category"],
+];
+
 const STATUS = {
   "Not started": { chip: "bg-[#F2F4F7] text-[#475467]", bar: "#98A2B3" },
   "In progress": { chip: "bg-[#E3ECFC] text-[#2552B8]", bar: "#3B6FE0" },
@@ -29,13 +39,18 @@ const STATUS = {
 
 const EMPTY = {
   title: "",
+  category: CATEGORIES[0],
+  ref: "",
   project: "",
   owner: "",
+  organisation: "",
   priority: "Medium",
   start: "",
   end: "",
   status: "Not started",
   progress: 0,
+  risk: "",
+  mitigation: "",
   notes: "",
 };
 
@@ -67,7 +82,23 @@ const initials = (name) =>
 const avatarColor = (name) =>
   AVATAR[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % AVATAR.length];
 
+// References sort the way people read them: 1.2 before 1.10, and rows without a reference last
+const byRef = (a, b) => {
+  if (!a.ref !== !b.ref) return a.ref ? -1 : 1;
+  return (
+    (a.ref || "").localeCompare(b.ref || "", undefined, { numeric: true }) ||
+    a.start.localeCompare(b.start)
+  );
+};
+
+// Template order: section by section, each section by reference
+const gridOrder = (rows) =>
+  [...rows].sort(
+    (a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category) || byRef(a, b)
+  );
+
 const SORTERS = {
+  ref: byRef,
   title: (a, b) => a.title.localeCompare(b.title),
   owner: (a, b) => (a.owner || "").localeCompare(b.owner || ""),
   priority: (a, b) =>
@@ -91,11 +122,53 @@ function applyRules(f, key, value) {
   return next;
 }
 
-function exportCsv(rows) {
-  const head = ["Activity", "Project", "Owner", "Priority", "Status", "Progress (%)", "Start", "End", "Notes"];
+/* ---------- reporting periods (grid columns) ---------- */
+
+// Calendar periods of `size` months (6 = half-years, 3 = quarters) that cover every activity.
+// `to` is exclusive.
+function buildPeriods(items, size) {
+  if (!items.length) return [];
+  const min = new Date(Math.min(...items.map((r) => +toDate(r.start))));
+  const max = new Date(Math.max(...items.map((r) => +toDate(r.end))));
+  const out = [];
+  let y = min.getFullYear();
+  let m = Math.floor(min.getMonth() / size) * size;
+  while (new Date(y, m, 1) <= max) {
+    out.push({
+      key: `${y}-${m}`,
+      year: y,
+      label: size === 3 ? `Q${m / 3 + 1}` : `H${m / 6 + 1}`,
+      from: new Date(y, m, 1),
+      to: new Date(y, m + size, 1),
+    });
+    m += size;
+    if (m >= 12) {
+      m = 0;
+      y += 1;
+    }
+  }
+  return out;
+}
+
+const inPeriod = (r, p) => toDate(r.start) < p.to && toDate(r.end) >= p.from;
+const periodName = (p) => `${p.year} ${p.label}`;
+
+/* ---------- CSV ---------- */
+
+function exportCsv(rows, periods = []) {
+  const head = [
+    "Category", "Ref", "Activity", "Project", "Owner", "Organisation", "Priority", "Status",
+    "Progress (%)", "Start", "End", ...periods.map(periodName), "Risk", "Mitigation", "Notes",
+  ];
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = rows.map((r) =>
-    [r.title, r.project, r.owner, r.priority || "Medium", r.status, r.progress, r.start, r.end, r.notes]
+  const ordered = periods.length ? gridOrder(rows) : rows;
+  const lines = ordered.map((r) =>
+    [
+      r.category, r.ref, r.title, r.project, r.owner, r.organisation, r.priority || "Medium",
+      r.status, r.progress, r.start, r.end,
+      ...periods.map((p) => (inPeriod(r, p) ? "x" : "")),
+      r.risk, r.mitigation, r.notes,
+    ]
       .map(esc)
       .join(",")
   );
@@ -174,6 +247,20 @@ function Due({ a }) {
   return <span className="text-xs text-[#667085]">{n}d left</span>;
 }
 
+// One line under an activity title when it has a recorded risk
+function RiskLine({ a }) {
+  if (!a.risk) return null;
+  return (
+    <p
+      className="mt-0.5 flex items-center gap-1 truncate text-xs text-[#B54708]"
+      title={`Risk: ${a.risk}${a.mitigation ? `\nMitigation: ${a.mitigation}` : ""}`}
+    >
+      <AlertTriangle size={12} className="shrink-0" />
+      <span className="truncate">{a.risk}</span>
+    </p>
+  );
+}
+
 function StatusSelect({ value, onChange }) {
   return (
     <select
@@ -209,16 +296,18 @@ function Empty({ onAdd, filtered }) {
 
 /* ---------- views ---------- */
 
-function ListView({ rows, group, sort, onSort, onEdit, onDuplicate, onDelete, onStatus }) {
+function ListView({ rows, groupBy, sort, onSort, onEdit, onDuplicate, onDelete, onStatus }) {
   const groups = useMemo(() => {
-    if (!group) return [{ name: null, rows }];
+    if (groupBy === "none") return [{ name: null, rows }];
     const m = new Map();
     rows.forEach((r) => {
-      const k = r.project || "No project";
+      const k = groupBy === "category" ? r.category : r.project || "No project";
       m.set(k, [...(m.get(k) || []), r]);
     });
-    return [...m].map(([name, rs]) => ({ name, rows: rs }));
-  }, [rows, group]);
+    const list = [...m].map(([name, rs]) => ({ name, rows: rs }));
+    if (groupBy === "category") list.sort((a, b) => CATEGORIES.indexOf(a.name) - CATEGORIES.indexOf(b.name));
+    return list;
+  }, [rows, groupBy]);
 
   const head = (key, label) => (
     <th className={TH} aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
@@ -231,9 +320,10 @@ function ListView({ rows, group, sort, onSort, onEdit, onDuplicate, onDelete, on
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#E6ECE9] bg-white">
-      <table className="w-full min-w-[900px] border-collapse text-sm">
+      <table className="w-full min-w-[960px] border-collapse text-sm">
         <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
           <tr>
+            {head("ref", "Ref")}
             {head("title", "Activity")}
             {head("owner", "Owner")}
             {head("priority", "Priority")}
@@ -248,7 +338,7 @@ function ListView({ rows, group, sort, onSort, onEdit, onDuplicate, onDelete, on
             <Fragment key={g.name ?? "all"}>
               {g.name && (
                 <tr className="bg-[#F6F8F7]">
-                  <td colSpan={7} className="px-3 py-2 text-xs font-semibold text-[#475467]">
+                  <td colSpan={8} className="px-3 py-2 text-xs font-semibold text-[#475467]">
                     {g.name}
                     <span className="ml-2 font-normal text-[#667085]">
                       {g.rows.length} {g.rows.length === 1 ? "activity" : "activities"}, average{" "}
@@ -257,38 +347,157 @@ function ListView({ rows, group, sort, onSort, onEdit, onDuplicate, onDelete, on
                   </td>
                 </tr>
               )}
-              {g.rows.map((r) => (
-                <tr key={r.id} className="border-b border-[#EEF1F0] last:border-0 hover:bg-[#FAFBFA]">
-                  <td className="max-w-[300px] px-3 py-3">
-                    <button className={`block max-w-full truncate text-left font-medium hover:text-[#5B3FD0] ${FOCUS}`} onClick={() => onEdit(r)}>
-                      {r.title}
-                    </button>
-                    {!group && r.project && <p className="truncate text-xs text-[#667085]">{r.project}</p>}
-                  </td>
-                  <td className="px-3 py-3"><Owner name={r.owner} /></td>
-                  <td className="px-3 py-3"><Priority value={r.priority} /></td>
-                  <td className="whitespace-nowrap px-3 py-3">
-                    <p>{shortDate(r.start)} to {shortDate(r.end)}</p>
-                    <Due a={r} />
-                  </td>
-                  <td className="w-40 px-3 py-3">
-                    <p className="mb-1 text-xs text-[#667085]">{r.progress}%</p>
-                    <ProgressBar value={r.progress} color={STATUS[r.status].bar} />
-                  </td>
-                  <td className="px-3 py-3">
-                    <StatusSelect value={r.status} onChange={(s) => onStatus(r, s)} />
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-right">
-                    <button className={ICON_BTN} aria-label={`Edit ${r.title}`} onClick={() => onEdit(r)}><Pencil size={15} /></button>
-                    <button className={ICON_BTN} aria-label={`Duplicate ${r.title}`} onClick={() => onDuplicate(r)}><Copy size={15} /></button>
-                    <button className={ICON_BTN} aria-label={`Delete ${r.title}`} onClick={() => onDelete(r)}><Trash2 size={15} /></button>
-                  </td>
-                </tr>
-              ))}
+              {g.rows.map((r) => {
+                const sub = [groupBy !== "category" ? r.category : "", groupBy !== "project" ? r.project : ""]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <tr key={r.id} className="border-b border-[#EEF1F0] last:border-0 hover:bg-[#FAFBFA]">
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-[#667085]">{r.ref || "-"}</td>
+                    <td className="max-w-[300px] px-3 py-3">
+                      <button className={`block max-w-full truncate text-left font-medium hover:text-[#5B3FD0] ${FOCUS}`} onClick={() => onEdit(r)}>
+                        {r.title}
+                      </button>
+                      {sub && <p className="truncate text-xs text-[#667085]">{sub}</p>}
+                      <RiskLine a={r} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Owner name={r.owner} />
+                      {r.organisation && <p className="mt-0.5 truncate pl-8 text-xs text-[#667085]">{r.organisation}</p>}
+                    </td>
+                    <td className="px-3 py-3"><Priority value={r.priority} /></td>
+                    <td className="whitespace-nowrap px-3 py-3">
+                      <p>{shortDate(r.start)} to {shortDate(r.end)}</p>
+                      <Due a={r} />
+                    </td>
+                    <td className="w-40 px-3 py-3">
+                      <p className="mb-1 text-xs text-[#667085]">{r.progress}%</p>
+                      <ProgressBar value={r.progress} color={STATUS[r.status].bar} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <StatusSelect value={r.status} onChange={(s) => onStatus(r, s)} />
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-right">
+                      <button className={ICON_BTN} aria-label={`Edit ${r.title}`} onClick={() => onEdit(r)}><Pencil size={15} /></button>
+                      <button className={ICON_BTN} aria-label={`Duplicate ${r.title}`} onClick={() => onDuplicate(r)}><Copy size={15} /></button>
+                      <button className={ICON_BTN} aria-label={`Delete ${r.title}`} onClick={() => onDelete(r)}><Trash2 size={15} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
             </Fragment>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* The AmplifyChange template as a table: sections, reference, owner, organisation,
+   an x for every period the activity runs in, then risk and mitigation. */
+function GridView({ rows, periods, size, onSize, onOpen, onAdd }) {
+  const sections = useMemo(
+    () => CATEGORIES.map((name) => ({ name, rows: rows.filter((r) => r.category === name).sort(byRef) })),
+    [rows]
+  );
+  const cols = 6 + periods.length;
+  const cell = "px-3 py-2.5 align-top";
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <div className="flex rounded-lg bg-[#EEF1F0] p-1" role="group" aria-label="Period length">
+          {[[6, "6 months"], [3, "Quarters"]].map(([n, label]) => (
+            <button
+              key={n}
+              onClick={() => onSize(n)}
+              aria-pressed={size === n}
+              className={`rounded-md px-3 py-1 text-sm transition motion-reduce:transition-none ${FOCUS} ${
+                size === n ? "bg-white font-medium text-[#5B3FD0] shadow-sm" : "text-[#667085] hover:text-[#0B2B24]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-[#667085]">
+          An x marks each period an activity runs in, worked out from its start and end dates.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto rounded-2xl border border-[#E6ECE9] bg-white">
+        <table className="border-collapse text-sm" style={{ minWidth: 1100 + periods.length * 64 }}>
+          <thead className="border-b border-[#E6ECE9] bg-[#FAFBFA]">
+            <tr>
+              <th className={`${TH} sticky left-0 z-10 w-16 min-w-[64px] bg-[#FAFBFA]`}>Ref</th>
+              <th className={`${TH} sticky left-[64px] z-10 w-60 min-w-[240px] border-r border-[#E6ECE9] bg-[#FAFBFA]`}>Activity</th>
+              <th className={`${TH} min-w-[140px]`}>Owner</th>
+              <th className={`${TH} min-w-[140px]`}>Organisation</th>
+              {periods.map((p) => (
+                <th key={p.key} className="w-16 min-w-[64px] px-1 py-2 text-center text-xs font-medium text-[#667085]">
+                  <span className="block text-[10px] font-normal">{p.year}</span>
+                  {p.label}
+                </th>
+              ))}
+              <th className={`${TH} min-w-[220px]`}>Risk</th>
+              <th className={`${TH} min-w-[220px]`}>Mitigation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sections.map((s) => (
+              <Fragment key={s.name}>
+                <tr className="border-y border-[#E6ECE9] bg-[#F6F8F7]">
+                  <td colSpan={cols} className="px-3 py-2">
+                    <div className="sticky left-3 inline-flex items-center gap-3">
+                      <span className="text-xs font-semibold text-[#475467]">{s.name}</span>
+                      <span className="text-xs text-[#667085]">{s.rows.length}</span>
+                      <button
+                        className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-[#5B3FD0] hover:bg-[#EDE9FB] ${FOCUS}`}
+                        onClick={() => onAdd(s.name)}
+                        aria-label={`Add activity to ${s.name}`}
+                      >
+                        <Plus size={12} /> Add
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {s.rows.length === 0 && (
+                  <tr>
+                    <td colSpan={cols} className="px-3 py-3 text-xs text-[#98A2B3]">No activities in this section.</td>
+                  </tr>
+                )}
+                {s.rows.map((r) => (
+                  <tr key={r.id} className="border-b border-[#EEF1F0] last:border-0">
+                    <td className={`${cell} sticky left-0 z-10 w-16 min-w-[64px] whitespace-nowrap bg-white text-xs text-[#667085]`}>{r.ref || "-"}</td>
+                    <td className={`${cell} sticky left-[64px] z-10 w-60 min-w-[240px] border-r border-[#E6ECE9] bg-white`}>
+                      <button className={`text-left font-medium hover:text-[#5B3FD0] ${FOCUS}`} onClick={() => onOpen(r)}>
+                        {r.title}
+                      </button>
+                    </td>
+                    <td className={cell}>{r.owner || <span className="text-xs text-[#98A2B3]">Unassigned</span>}</td>
+                    <td className={`${cell} text-[#475467]`}>{r.organisation || <span className="text-xs text-[#98A2B3]">-</span>}</td>
+                    {periods.map((p) => (
+                      <td key={p.key} className="px-1 py-2.5 text-center align-middle">
+                        {inPeriod(r, p) && (
+                          <span
+                            className="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-semibold text-white"
+                            style={{ backgroundColor: STATUS[r.status].bar }}
+                          >
+                            <span aria-hidden="true">x</span>
+                            <span className="sr-only">Runs in {periodName(p)}</span>
+                          </span>
+                        )}
+                      </td>
+                    ))}
+                    <td className={`${cell} text-xs text-[#475467]`}>{r.risk || <span className="text-[#98A2B3]">-</span>}</td>
+                    <td className={`${cell} text-xs text-[#475467]`}>{r.mitigation || <span className="text-[#98A2B3]">-</span>}</td>
+                  </tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -353,20 +562,21 @@ function GanttView({ rows, onOpen }) {
           const left = ((+toDate(r.start) - +chart.from) / chart.span) * 100;
           const width = Math.max(((+toDate(r.end) + DAY - +toDate(r.start)) / chart.span) * 100, 0.6);
           const color = STATUS[r.status].bar;
+          const name = r.ref ? `${r.ref} ${r.title}` : r.title;
           return (
             <div key={r.id} className="flex border-b border-[#EEF1F0] last:border-0">
               <button
                 onClick={() => onOpen(r)}
                 className={`sticky left-0 z-10 w-60 shrink-0 border-r border-[#E6ECE9] bg-white px-3 py-2 text-left ${FOCUS}`}
               >
-                <p className="truncate text-sm font-medium">{r.title}</p>
+                <p className="truncate text-sm font-medium">{name}</p>
                 <p className="truncate text-xs text-[#667085]">{r.owner || "Unassigned"}</p>
               </button>
               <div className="relative h-12 flex-1">
                 <Lines />
                 <button
                   onClick={() => onOpen(r)}
-                  title={`${r.title}: ${shortDate(r.start)} to ${shortDate(r.end)}, ${r.progress}%`}
+                  title={`${name}: ${shortDate(r.start)} to ${shortDate(r.end)}, ${r.progress}%`}
                   className={`absolute top-3 h-6 overflow-hidden rounded-md ${isOverdue(r) ? "ring-2 ring-[#E5484D]" : ""} ${FOCUS}`}
                   style={{ left: `${left}%`, width: `${width}%`, backgroundColor: `${color}40` }}
                 >
@@ -399,17 +609,22 @@ function BoardView({ rows, onOpen, onStatus }) {
               {col.map((r) => (
                 <div key={r.id} className="rounded-xl border border-[#E6ECE9] bg-white p-3">
                   <button className={`text-left text-sm font-medium hover:text-[#5B3FD0] ${FOCUS}`} onClick={() => onOpen(r)}>
+                    {r.ref && <span className="mr-1.5 text-xs font-normal text-[#667085]">{r.ref}</span>}
                     {r.title}
                   </button>
-                  {r.project && <p className="mt-0.5 text-xs text-[#667085]">{r.project}</p>}
+                  <p className="mt-0.5 text-xs text-[#667085]">
+                    {[r.category, r.project].filter(Boolean).join(" · ")}
+                  </p>
                   <div className="mt-2 flex items-center justify-between text-xs">
                     <Owner name={r.owner} />
                     <Priority value={r.priority} />
                   </div>
+                  {r.organisation && <p className="mt-1 truncate text-xs text-[#667085]">{r.organisation}</p>}
                   <div className="mt-2 flex items-center justify-between text-xs text-[#667085]">
                     <span>{shortDate(r.start)} to {shortDate(r.end)}</span>
                     <Due a={r} />
                   </div>
+                  <RiskLine a={r} />
                   <div className="mt-2"><ProgressBar value={r.progress} color={STATUS[r.status].bar} /></div>
                   <div className="mt-2.5">
                     <StatusSelect value={r.status} onChange={(next) => onStatus(r, next)} />
@@ -427,7 +642,7 @@ function BoardView({ rows, onOpen, onStatus }) {
 
 /* ---------- side drawer form ---------- */
 
-function Drawer({ form, setForm, projects, owners, onSave, onDelete, onClose, saving, error }) {
+function Drawer({ form, setForm, projects, owners, organisations, onSave, onDelete, onClose, saving, error }) {
   const set = (k) => (e) => setForm(applyRules(form, k, e.target.value));
   const label = "mb-1 block text-xs font-medium text-[#667085]";
   const [tab, setTab] = useState("details");
@@ -475,23 +690,44 @@ function Drawer({ form, setForm, projects, owners, onSave, onDelete, onClose, sa
               {new Date(form.updatedAt).toLocaleString("en-GB")}
             </p>
           )}
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className={label} htmlFor="wp-category">Section</label>
+              <select id="wp-category" className={`${INPUT} w-full`} value={form.category} onChange={set("category")}>
+                {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={label} htmlFor="wp-ref">Reference</label>
+              <input id="wp-ref" className={`${INPUT} w-full`} value={form.ref} onChange={set("ref")} placeholder="1.1" maxLength={20} />
+            </div>
+          </div>
+
           <div>
             <label className={label} htmlFor="wp-title">Activity</label>
             <input id="wp-title" autoFocus className={`${INPUT} w-full`} value={form.title} onChange={set("title")} placeholder="What needs to be done?" />
           </div>
 
+          <div>
+            <label className={label} htmlFor="wp-project">Project</label>
+            <input id="wp-project" list="wp-projects" className={`${INPUT} w-full`} value={form.project} onChange={set("project")} />
+            <datalist id="wp-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={label} htmlFor="wp-project">Project</label>
-              <input id="wp-project" list="wp-projects" className={`${INPUT} w-full`} value={form.project} onChange={set("project")} />
-              <datalist id="wp-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
-            </div>
-            <div>
-              <label className={label} htmlFor="wp-owner">Owner</label>
+              <label className={label} htmlFor="wp-owner">Owner (name or position)</label>
               <input id="wp-owner" list="wp-owners" className={`${INPUT} w-full`} value={form.owner} onChange={set("owner")} />
               <datalist id="wp-owners">{owners.map((o) => <option key={o} value={o} />)}</datalist>
             </div>
+            <div>
+              <label className={label} htmlFor="wp-org">Organisation</label>
+              <input id="wp-org" list="wp-orgs" className={`${INPUT} w-full`} value={form.organisation} onChange={set("organisation")} />
+              <datalist id="wp-orgs">{organisations.map((o) => <option key={o} value={o} />)}</datalist>
+            </div>
           </div>
+          <p className="-mt-2 text-xs text-[#667085]">Separate several people or organisations with commas.</p>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -544,8 +780,18 @@ function Drawer({ form, setForm, projects, owners, onSave, onDelete, onClose, sa
           </div>
 
           <div>
+            <label className={label} htmlFor="wp-risk">Risk</label>
+            <textarea id="wp-risk" rows={2} maxLength={500} className={`${INPUT} w-full resize-y`} value={form.risk || ""} onChange={set("risk")} placeholder="What could stop this activity going ahead?" />
+          </div>
+
+          <div>
+            <label className={label} htmlFor="wp-mitigation">Mitigation</label>
+            <textarea id="wp-mitigation" rows={2} maxLength={500} className={`${INPUT} w-full resize-y`} value={form.mitigation || ""} onChange={set("mitigation")} placeholder="What you will do to reduce the risk" />
+          </div>
+
+          <div>
             <label className={label} htmlFor="wp-notes">Notes</label>
-            <textarea id="wp-notes" rows={4} className={`${INPUT} w-full resize-y`} value={form.notes || ""} onChange={set("notes")} placeholder="Deliverables, risks, links" />
+            <textarea id="wp-notes" rows={4} className={`${INPUT} w-full resize-y`} value={form.notes || ""} onChange={set("notes")} placeholder="Deliverables, links" />
           </div>
 
           {error && <p className={ERROR}>{error}</p>}
@@ -579,12 +825,14 @@ export default function WorkPlan() {
   const [saving, setSaving] = useState(false);
 
   const [view, setView] = useState("list");
-  const [group, setGroup] = useState(false);
+  const [groupBy, setGroupBy] = useState("none");
+  const [gridSize, setGridSize] = useState(6); // months per period column
   const [sort, setSort] = useState({ key: "start", dir: 1 });
   const [q, setQ] = useState("");
   const [project, setProject] = useState("All");
   const [owner, setOwner] = useState("All");
   const [status, setStatus] = useState("All");
+  const [category, setCategory] = useState("All");
   const [overdueOnly, setOverdueOnly] = useState(false);
 
   const load = () =>
@@ -609,6 +857,10 @@ export default function WorkPlan() {
 
   const projects = useMemo(() => [...new Set(items.map((i) => i.project).filter(Boolean))].sort(), [items]);
   const owners = useMemo(() => [...new Set(items.map((i) => i.owner).filter(Boolean))].sort(), [items]);
+  const organisations = useMemo(() => [...new Set(items.map((i) => i.organisation).filter(Boolean))].sort(), [items]);
+
+  // Columns come from every activity, so they do not jump around when a filter is on
+  const periods = useMemo(() => buildPeriods(items, gridSize), [items, gridSize]);
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -629,27 +881,32 @@ export default function WorkPlan() {
           (project === "All" || i.project === project) &&
           (owner === "All" || i.owner === owner) &&
           (status === "All" || i.status === status) &&
+          (category === "All" || i.category === category) &&
           (!overdueOnly || isOverdue(i)) &&
-          (!needle || [i.title, i.project, i.owner, i.notes].some((v) => (v || "").toLowerCase().includes(needle)))
+          (!needle ||
+            [i.title, i.ref, i.category, i.project, i.owner, i.organisation, i.risk, i.mitigation, i.notes].some((v) =>
+              (v || "").toLowerCase().includes(needle)
+            ))
       )
       .sort((a, b) => SORTERS[sort.key](a, b) * sort.dir);
-  }, [items, q, project, owner, status, overdueOnly, sort]);
+  }, [items, q, project, owner, status, category, overdueOnly, sort]);
 
-  const filtered = q || project !== "All" || owner !== "All" || status !== "All" || overdueOnly;
+  const filtered = q || project !== "All" || owner !== "All" || status !== "All" || category !== "All" || overdueOnly;
   const clearFilters = () => {
     setQ("");
     setProject("All");
     setOwner("All");
     setStatus("All");
+    setCategory("All");
     setOverdueOnly(false);
   };
 
   const onSort = (key) =>
     setSort((s) => (s.key === key ? { key, dir: -s.dir } : { key, dir: 1 }));
 
-  const openNew = () => {
+  const openNew = (cat) => {
     setFormError("");
-    setForm({ ...EMPTY });
+    setForm({ ...EMPTY, category: CATEGORIES.includes(cat) ? cat : CATEGORIES[0] });
   };
   const openEdit = (r) => {
     setFormError("");
@@ -658,7 +915,7 @@ export default function WorkPlan() {
   const duplicate = (r) => {
     setFormError("");
     const { id, ...rest } = r;
-    setForm({ ...EMPTY, ...rest, title: `${r.title} (copy)`, status: "Not started", progress: 0 });
+    setForm({ ...EMPTY, ...rest, ref: "", title: `${r.title} (copy)`, status: "Not started", progress: 0 });
   };
 
   async function onSave(e) {
@@ -673,7 +930,12 @@ export default function WorkPlan() {
     }
     setSaving(true);
     try {
-      await saveActivity({ ...form, title: form.title.trim(), progress: Number(form.progress) });
+      await saveActivity({
+        ...form,
+        title: form.title.trim(),
+        ref: (form.ref || "").trim(),
+        progress: Number(form.progress),
+      });
       setForm(null);
       await load();
     } catch (err) {
@@ -728,10 +990,14 @@ export default function WorkPlan() {
           <p className="text-sm text-[#667085]">Plan, assign and track activities across projects.</p>
         </div>
         <span className="flex-1" />
-        <button className={BTN} onClick={() => exportCsv(rows)} disabled={!rows.length}>
+        <button
+          className={BTN}
+          onClick={() => exportCsv(rows, view === "grid" ? periods : [])}
+          disabled={!rows.length}
+        >
           <Download size={16} /> Export CSV
         </button>
-        <button className={BTN_PRIMARY} onClick={openNew}>
+        <button className={BTN_PRIMARY} onClick={() => openNew()}>
           <Plus size={16} /> New activity
         </button>
       </div>
@@ -769,6 +1035,10 @@ export default function WorkPlan() {
             className={`${INPUT} w-56 pl-8`}
           />
         </div>
+        <select className={INPUT} value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Filter by section">
+          <option value="All">All sections</option>
+          {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+        </select>
         <select className={INPUT} value={project} onChange={(e) => setProject(e.target.value)} aria-label="Filter by project">
           <option value="All">All projects</option>
           {projects.map((p) => <option key={p}>{p}</option>)}
@@ -788,13 +1058,13 @@ export default function WorkPlan() {
         )}
         <span className="flex-1" />
         {view === "list" && (
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input type="checkbox" checked={group} onChange={(e) => setGroup(e.target.checked)} className="h-4 w-4 accent-[#5B3FD0]" />
-            Group by project
-          </label>
+          <select className={INPUT} value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Group activities">
+            {GROUPINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
         )}
         <div className="flex rounded-lg bg-[#EEF1F0] p-1" role="group" aria-label="View">
           {tab("list", "List")}
+          {tab("grid", "Grid")}
           {tab("timeline", "Timeline")}
           {tab("board", "Board")}
         </div>
@@ -804,17 +1074,26 @@ export default function WorkPlan() {
       {loading ? (
         <p className="py-10 text-center text-sm text-[#667085]">Loading workplan...</p>
       ) : rows.length === 0 ? (
-        <Empty onAdd={openNew} filtered={filtered} />
+        <Empty onAdd={() => openNew()} filtered={filtered} />
       ) : view === "list" ? (
         <ListView
           rows={rows}
-          group={group}
+          groupBy={groupBy}
           sort={sort}
           onSort={onSort}
           onEdit={openEdit}
           onDuplicate={duplicate}
           onDelete={remove}
           onStatus={quickStatus}
+        />
+      ) : view === "grid" ? (
+        <GridView
+          rows={rows}
+          periods={periods}
+          size={gridSize}
+          onSize={setGridSize}
+          onOpen={openEdit}
+          onAdd={openNew}
         />
       ) : view === "timeline" ? (
         <GanttView rows={[...rows].sort((a, b) => a.start.localeCompare(b.start))} onOpen={openEdit} />
@@ -828,6 +1107,7 @@ export default function WorkPlan() {
           setForm={setForm}
           projects={projects}
           owners={owners}
+          organisations={organisations}
           onSave={onSave}
           onDelete={() => remove(form)}
           onClose={() => setForm(null)}

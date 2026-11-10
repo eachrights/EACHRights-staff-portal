@@ -43,20 +43,31 @@ import {
   cancelLeave,
   decideLeave,
 } from "./attendanceApi";
-import { passkeysSupported, registerThisDevice, getAssertion } from "./passkeyClient";
+import {
+  passkeysSupported,
+  registerThisDevice,
+  getAssertion,
+  prepareRegistration,
+  prepareAssertion,
+} from "./passkeyClient";
 import ResetProject from "./ResetProject";
 import { SummaryCards, StatTile, ReportCharts, filterDays, METRICS } from "./attendanceStats";
 
-/* ---------- time helpers (all shown in Nairobi time) ---------- */
+/* =====================================================================
+   Helpers: time, dates, text
+   All times are shown in Nairobi time.
+   ===================================================================== */
 
 const TZ = "Africa/Nairobi";
 const DAY_MS = 86400000;
 const BRAND_FONT = '"Fraunces", Georgia, serif';
+const REFRESH_MS = 60000;
 
 // True when the portal is open in a phone's own browser
 const onPhone = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // The printed QR opens this page with ?clock=<token>. Keep the token for the rest of the day and tidy the address bar.
+// localStorage, not sessionStorage: captureClockToken.js also fills it in before the login page appears.
 const QR_KEY = "eachrights_clock_qr";
 const QR_KEEP_MS = 12 * 3600 * 1000;
 function readScan() {
@@ -68,7 +79,6 @@ function readScan() {
       url.searchParams.delete("clock");
       window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     }
-    // localStorage, not sessionStorage: it is also filled in by captureClockToken.js before the login page appears
     const saved = JSON.parse(localStorage.getItem(QR_KEY) || "null");
     if (saved && Date.now() - saved.at < QR_KEEP_MS) return saved;
   } catch {
@@ -81,24 +91,23 @@ const timeOf = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
 const dayKey = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: TZ });
 const todayKey = () => dayKey(new Date().toISOString());
+const noon = (key) => new Date(`${key}T12:00:00Z`);
 const dayLabel = (key) =>
-  new Date(`${key}T12:00:00Z`).toLocaleDateString("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  });
-const addDays = (key, n) => new Date(+new Date(`${key}T12:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
-const weekday = (key) => new Date(`${key}T12:00:00Z`).getUTCDay(); // 0 = Sunday
+  noon(key).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const fullDate = (key) =>
-  new Date(`${key}T12:00:00Z`).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  noon(key).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const addDays = (key, n) => new Date(+noon(key) + n * DAY_MS).toISOString().slice(0, 10);
+const weekday = (key) => noon(key).getUTCDay(); // 0 = Sunday
+const monthEnd = (ym) => {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+};
+const prevMonthOf = (today) => {
+  const last = addDays(`${today.slice(0, 7)}-01`, -1);
+  return { from: `${last.slice(0, 7)}-01`, to: last };
+};
 
-// Hours as a number (for example 7.5) shown as "7h 30m"
+// 7.5 hours -> "7h 30m"
 const hoursText = (h) => {
   if (!h || h <= 0) return "-";
   const m = Math.round(h * 60);
@@ -119,22 +128,22 @@ const initials = (name) =>
     .map((p) => p[0].toUpperCase())
     .join("");
 
-// The API wants plain dates (YYYY-MM-DD) for from and to, not timestamps.
-// Ranges end today at the latest, so the history never lists days that have not happened yet.
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const dateRange = (from, to) => (from === to ? fullDate(from) : `${fullDate(from)} to ${fullDate(to)}`);
+const matches = (needle, ...parts) => !needle || parts.join(" ").toLowerCase().includes(needle);
+
+/* ---------- ranges ----------
+   The API wants plain dates (YYYY-MM-DD) for from and to, not timestamps.
+   - rangeDays: history ranges, never later than today.
+   - periodDays: whole months or years for reports and leave, not cut off at today. */
+
 function rangeDays(range) {
   const today = todayKey();
   const year = Number(today.slice(0, 4));
-  const monthEnd = (ym) => {
-    const [y, m] = ym.split("-").map(Number);
-    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-  };
   const cap = (to) => (to > today ? today : to);
 
   if (range === "month") return { from: `${today.slice(0, 7)}-01`, to: today };
-  if (range === "lastmonth") {
-    const prev = addDays(`${today.slice(0, 7)}-01`, -1);
-    return { from: `${prev.slice(0, 7)}-01`, to: prev };
-  }
+  if (range === "lastmonth") return prevMonthOf(today);
   if (range === "30d") return { from: addDays(today, -29), to: today };
   if (range === "year") return { from: `${year}-01-01`, to: today };
   if (range === "lastyear") return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
@@ -146,22 +155,14 @@ function rangeDays(range) {
     const y = range.slice(2);
     return { from: `${y}-01-01`, to: cap(`${y}-12-31`) };
   }
-  const dow = weekday(today);
-  return { from: addDays(today, -((dow + 6) % 7)), to: today }; // week starts Monday
+  // "week": starts Monday
+  return { from: addDays(today, -((weekday(today) + 6) % 7)), to: today };
 }
 
-// A whole month or year (used by the reports). Unlike rangeDays, this is not cut off at today.
 function periodDays(p) {
   const today = todayKey();
   const year = Number(today.slice(0, 4));
-  const monthEnd = (ym) => {
-    const [y, m] = ym.split("-").map(Number);
-    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-  };
-  if (p === "lastmonth") {
-    const prev = addDays(`${today.slice(0, 7)}-01`, -1);
-    return { from: `${prev.slice(0, 7)}-01`, to: prev };
-  }
+  if (p === "lastmonth") return prevMonthOf(today);
   if (p === "year") return { from: `${year}-01-01`, to: `${year}-12-31` };
   if (p === "lastyear") return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
   if (p.startsWith("m:")) {
@@ -176,8 +177,21 @@ function periodDays(p) {
   return { from: `${ym}-01`, to: monthEnd(ym) };
 }
 
-// Weekends and public holidays from the local holidays file. The leave form uses this to count working days.
+// Weekends and public holidays from the local holidays file
 const dayOff = (key) => ({ weekend: WEEKEND_DAYS.includes(weekday(key)), holiday: holidayName(key) });
+
+// Working days in a range: weekends and public holidays don't count against anyone's leave
+function workingDays(from, to) {
+  if (!from || !to) return 0;
+  let n = 0;
+  for (let k = from; k <= to; k = addDays(k, 1)) {
+    const o = dayOff(k);
+    if (!o.weekend && !o.holiday) n += 1;
+  }
+  return n;
+}
+
+/* ---------- hooks ---------- */
 
 function useNow() {
   const [now, setNow] = useState(new Date());
@@ -188,8 +202,21 @@ function useNow() {
   return now;
 }
 
-/* ---------- design tokens (Tailwind classes) ----------
-   ink #0B2B24 | green #008060 / #00664E | canvas #F6F8F7 | line #E3E8E5 | muted #667085 */
+// Runs fn now and then every minute while enabled.
+// Used to fetch passkey challenges ahead of the tap (see passkeyClient.js: Safari wants the prompt to open straight after a tap).
+function usePrepare(fn, enabled) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    fn();
+    const t = setInterval(fn, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [fn, enabled]);
+}
+
+/* =====================================================================
+   Design tokens (Tailwind classes)
+   ink #0B2B24 | green #008060 / #00664E | canvas #F6F8F7 | line #E3E8E5 | muted #667085
+   ===================================================================== */
 
 const FOCUS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#008060]";
@@ -199,9 +226,15 @@ const BTN_SM = `inline-flex h-8 items-center justify-center gap-1.5 whitespace-n
 const BTN_SM_PRIMARY = `inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#008060] bg-[#008060] px-2.5 text-xs font-medium text-white transition hover:bg-[#00664E] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`;
 const INPUT = `h-9 rounded-lg border border-[#D5DBD8] bg-white px-3 text-sm text-[#0B2B24] placeholder:text-[#98A2B3] transition hover:border-[#B8C2BD] motion-reduce:transition-none ${FOCUS}`;
 const CARD = "rounded-xl border border-[#E3E8E5] bg-white p-5 shadow-[0_1px_2px_rgba(11,43,36,0.04)]";
+const SURFACE = "rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]";
 const TH = "whitespace-nowrap px-4 py-2.5 text-left text-xs font-medium text-[#667085]";
 const TD = "px-4 py-3";
 const ROW = "border-b border-[#EEF1F0] transition-colors last:border-0 hover:bg-[#FAFBFA] motion-reduce:transition-none";
+const NUM = `${TD} text-right tabular-nums`;
+const NUM_HEAD = `${TH} text-right`;
+const TOOLBAR = `mb-4 flex flex-wrap items-center gap-2 p-3 print:hidden ${SURFACE}`;
+const SUMMARY_BAR =
+  "flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]";
 
 const STATE_TAG = {
   present: { text: "Present", cls: "bg-[#E3F3EC] text-[#00664E]" },
@@ -236,6 +269,10 @@ const PRINT_CSS = `
 }
 `;
 
+/* =====================================================================
+   Small building blocks
+   ===================================================================== */
+
 function PrintHeader({ title, subtitle, period }) {
   return (
     <div className="hidden px-1 pb-3 print:block">
@@ -247,8 +284,6 @@ function PrintHeader({ title, subtitle, period }) {
     </div>
   );
 }
-
-/* ---------- small pieces ---------- */
 
 function Banner({ msg }) {
   if (!msg) return null;
@@ -265,6 +300,14 @@ function Banner({ msg }) {
     </p>
   );
 }
+
+// Banner for an error string that may be empty
+const ErrorBanner = ({ error, flush = false }) =>
+  error ? (
+    <div className={flush ? "p-5 pb-0" : ""}>
+      <Banner msg={{ ok: false, text: error }} />
+    </div>
+  ) : null;
 
 function Chip({ text, cls, dot = true }) {
   return (
@@ -289,6 +332,13 @@ function Avatar({ name, size = 32 }) {
   );
 }
 
+const PersonCell = ({ name }) => (
+  <span className="flex items-center gap-3">
+    <Avatar name={name} />
+    <span className="font-medium">{name}</span>
+  </span>
+);
+
 function Loading({ text = "Loading..." }) {
   return (
     <p className="px-4 py-12 text-center text-sm text-[#667085]" role="status">
@@ -312,7 +362,7 @@ function Empty({ icon: Icon = CalendarDays, title, hint }) {
 // A titled block: heading and short description on the left, actions on the right
 function Panel({ title, description, actions, children, className = "", id, flush = false }) {
   return (
-    <section id={id} className={`mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)] ${className}`}>
+    <section id={id} className={`mb-6 ${SURFACE} ${className}`}>
       {(title || actions) && (
         <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
           <div className="min-w-0">
@@ -358,51 +408,56 @@ function Toggle({ checked, onChange, label, hint }) {
   );
 }
 
-function RangeSelect({ value, onChange }) {
-  const thisYear = Number(todayKey().slice(0, 4));
-  const kind = value.startsWith("m:") ? "pickmonth" : value.startsWith("y:") ? "pickyear" : value;
-  const onKind = (k) => {
-    if (k === "pickmonth") onChange(`m:${todayKey().slice(0, 7)}`);
-    else if (k === "pickyear") onChange(`y:${thisYear}`);
-    else onChange(k);
-  };
+function SearchBox({ value, onChange }) {
+  return (
+    <div className="relative">
+      <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
+      <input
+        type="search"
+        className={`${INPUT} w-56 pl-9`}
+        placeholder="Search by name"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Search by name"
+      />
+    </div>
+  );
+}
+
+// Download CSV and Print buttons shared by every list
+function ExportButtons({ onCsv, disabled }) {
   return (
     <>
-      <select className={INPUT} value={kind} onChange={(e) => onKind(e.target.value)} aria-label="Date range">
-        <option value="week">This week</option>
-        <option value="month">This month</option>
-        <option value="lastmonth">Last month</option>
-        <option value="30d">Last 30 days</option>
-        <option value="year">This year</option>
-        <option value="lastyear">Last year</option>
-        <option value="pickmonth">Choose a month</option>
-        <option value="pickyear">Choose a year</option>
-      </select>
-      {kind === "pickmonth" && (
-        <input
-          type="month"
-          className={INPUT}
-          value={value.slice(2)}
-          max={todayKey().slice(0, 7)}
-          onChange={(e) => e.target.value && onChange(`m:${e.target.value}`)}
-          aria-label="Month"
-        />
-      )}
-      {kind === "pickyear" && (
-        <select className={INPUT} value={value.slice(2)} onChange={(e) => onChange(`y:${e.target.value}`)} aria-label="Year">
-          {[0, 1, 2, 3, 4].map((i) => thisYear - i).map((y) => (
-            <option key={y} value={y}>
-              {y}
-            </option>
-          ))}
-        </select>
-      )}
+      <button className={BTN} onClick={onCsv} disabled={disabled}>
+        <Download size={16} /> Download CSV
+      </button>
+      <button className={BTN} onClick={() => window.print()} disabled={disabled}>
+        <Printer size={16} /> Print
+      </button>
     </>
   );
 }
 
-// Month or year picker for the reports. With future set, next year and later months can be chosen too (leave).
-function PeriodSelect({ value, onChange, future = false }) {
+/* ---------- range and period pickers ---------- */
+
+const RANGE_OPTIONS = [
+  ["week", "This week"],
+  ["month", "This month"],
+  ["lastmonth", "Last month"],
+  ["30d", "Last 30 days"],
+  ["year", "This year"],
+  ["lastyear", "Last year"],
+];
+const PERIOD_OPTIONS = [
+  ["month", "This month"],
+  ["lastmonth", "Last month"],
+  ["year", "This year"],
+  ["lastyear", "Last year"],
+];
+
+// One picker for both. Values are "week", "month", ... or "m:2026-10" / "y:2026".
+// With future set, next year and later months can be chosen too (leave).
+function PeriodSelect({ value, onChange, options = RANGE_OPTIONS, future = false, label = "Date range" }) {
   const thisYear = Number(todayKey().slice(0, 4));
   const kind = value.startsWith("m:") ? "pickmonth" : value.startsWith("y:") ? "pickyear" : value;
   const onKind = (k) => {
@@ -413,11 +468,12 @@ function PeriodSelect({ value, onChange, future = false }) {
   const years = Array.from({ length: 6 }, (_, i) => (future ? thisYear + 1 : thisYear) - i);
   return (
     <>
-      <select className={INPUT} value={kind} onChange={(e) => onKind(e.target.value)} aria-label="Period">
-        <option value="month">This month</option>
-        <option value="lastmonth">Last month</option>
-        <option value="year">This year</option>
-        <option value="lastyear">Last year</option>
+      <select className={INPUT} value={kind} onChange={(e) => onKind(e.target.value)} aria-label={label}>
+        {options.map(([v, text]) => (
+          <option key={v} value={v}>
+            {text}
+          </option>
+        ))}
         <option value="pickmonth">Choose a month</option>
         <option value="pickyear">Choose a year</option>
       </select>
@@ -448,18 +504,14 @@ function PeriodSelect({ value, onChange, future = false }) {
 function DayNote({ day }) {
   if (!day) return null;
   const tag = STATE_TAG[day.state];
-  const text =
-    day.state === "holiday"
-      ? `Today is a public holiday${day.note ? `: ${day.note}` : ""}.`
-      : day.state === "weekend"
-      ? "Today is a weekend."
-      : day.state === "leave"
-      ? "You are on approved leave today."
-      : day.state === "away"
-      ? `You are away on duty today${day.note ? `: ${day.note}` : ""}.`
-      : day.state === "remote"
-      ? "You are working remotely today."
-      : "";
+  const note = day.note ? `: ${day.note}` : "";
+  const text = {
+    holiday: `Today is a public holiday${note}.`,
+    weekend: "Today is a weekend.",
+    leave: "You are on approved leave today.",
+    away: `You are away on duty today${note}.`,
+    remote: "You are working remotely today.",
+  }[day.state];
   if (!text) return null;
   return (
     <p role="status" className={`mb-5 rounded-lg px-4 py-2.5 text-sm font-medium ${tag.cls}`}>
@@ -468,12 +520,24 @@ function DayNote({ day }) {
   );
 }
 
+// The clock-out cell: a time, "In progress" for today, or a warning for a past day with no clock-out
+function ClockOutCell({ out, hasIn, isToday }) {
+  if (out) return timeOf(out);
+  if (!hasIn) return "-";
+  return isToday ? <span className="text-[#00664E]">In progress</span> : <span className="text-[#B54708]">No clock-out</span>;
+}
+
 // One row per day, newest first. Weekends, holidays, leave and absences all show up.
 function HistoryTable({ days }) {
   const today = todayKey();
   const rows = [...days].reverse();
   if (!rows.length)
-    return <Empty title="No days to show" hint="Nothing matches here. Clear the card filter or pick a longer range to see more of your history." />;
+    return (
+      <Empty
+        title="No days to show"
+        hint="Nothing matches here. Clear the card filter or pick a longer range to see more of your history."
+      />
+    );
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] border-collapse text-sm">
@@ -501,17 +565,7 @@ function HistoryTable({ days }) {
                 </td>
                 <td className={`${TD} tabular-nums`}>{r?.in ? timeOf(r.in) : "-"}</td>
                 <td className={`${TD} tabular-nums`}>
-                  {r?.out ? (
-                    timeOf(r.out)
-                  ) : r?.in ? (
-                    d.date === today ? (
-                      <span className="text-[#00664E]">In progress</span>
-                    ) : (
-                      <span className="text-[#B54708]">No clock-out</span>
-                    )
-                  ) : (
-                    "-"
-                  )}
+                  <ClockOutCell out={r?.out} hasIn={!!r?.in} isToday={d.date === today} />
                 </td>
                 <td className={`${TD} font-medium tabular-nums`}>{hoursText(r?.hours)}</td>
               </tr>
@@ -523,7 +577,7 @@ function HistoryTable({ days }) {
   );
 }
 
-/* ---------- download (CSV) ---------- */
+/* ---------- CSV download ---------- */
 
 function downloadCsv(head, lines, prefix) {
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
@@ -578,7 +632,9 @@ function exportDay(date, records, others = []) {
   );
 }
 
-/* ---------- my phone: fingerprint, face or PIN ---------- */
+/* =====================================================================
+   My phone: fingerprint, face or PIN
+   ===================================================================== */
 
 function PasskeyCard({ today, onChange }) {
   const [items, setItems] = useState(null);
@@ -596,6 +652,9 @@ function PasskeyCard({ today, onChange }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Have the registration challenge ready before the person taps the button
+  usePrepare(prepareRegistration, supported);
 
   // Nothing to show when passkeys are neither required nor already set up and this device can't do them
   if (!supported && !(items && items.length) && !today.requirePasskey) return null;
@@ -673,7 +732,9 @@ function PasskeyCard({ today, onChange }) {
   );
 }
 
-/* ---------- QR poster (administrator): print it and stick it up at the office ---------- */
+/* =====================================================================
+   QR poster (administrator): print it and stick it up at the office
+   ===================================================================== */
 
 // To use your own logo: save it in the portal's public folder (for example public/logo.png) and set this to "/logo.png".
 // Leave it empty to use the green "E" mark from the login page.
@@ -762,7 +823,7 @@ function PosterLogo({ size = 76 }) {
   );
 }
 
-function PosterStep({ icon: Icon, title, text: caption }) {
+function PosterStep({ icon: Icon, title, caption }) {
   return (
     <div style={{ flex: 1, textAlign: "center" }}>
       <div
@@ -794,7 +855,7 @@ function QrScreen() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) return undefined;
     let on = true;
     const url = `${window.location.origin}/clock?clock=${encodeURIComponent(token)}`;
     makeQrImage(url)
@@ -921,9 +982,9 @@ function QrScreen() {
 
             {/* Steps */}
             <div style={{ display: "flex", gap: 16, padding: "38px 56px 0" }}>
-              <PosterStep icon={Wifi} title="Connect" text="To the office Wi-Fi" />
-              <PosterStep icon={ScanLine} title="Scan" text="This code with your camera" />
-              <PosterStep icon={Fingerprint} title="Confirm" text="Fingerprint, face or PIN" />
+              <PosterStep icon={Wifi} title="Connect" caption="To the office Wi-Fi" />
+              <PosterStep icon={ScanLine} title="Scan" caption="This code with your camera" />
+              <PosterStep icon={Fingerprint} title="Confirm" caption="Fingerprint, face or PIN" />
             </div>
 
             {/* Footer */}
@@ -940,7 +1001,9 @@ function QrScreen() {
   );
 }
 
-/* ---------- my attendance ---------- */
+/* =====================================================================
+   My attendance
+   ===================================================================== */
 
 function MyAttendance() {
   const [today, setToday] = useState(null);
@@ -962,6 +1025,7 @@ function MyAttendance() {
       .then(setData)
       .catch((e) => setMsg({ ok: false, text: e.message }));
   }, [range]);
+  const reload = useCallback(() => Promise.all([loadToday(), loadRecords()]), [loadToday, loadRecords]);
 
   useEffect(() => {
     loadToday();
@@ -970,28 +1034,22 @@ function MyAttendance() {
     loadRecords();
   }, [loadRecords]);
 
-  // Refresh now and then so a scanner punch shows up without reloading
+  // Refresh now and then so a scanner punch shows up without reloading,
+  // and re-check the office network as soon as the connection changes or the tab regains focus
   useEffect(() => {
-    const t = setInterval(() => {
-      loadToday();
-      loadRecords();
-    }, 60000);
-    return () => clearInterval(t);
-  }, [loadToday, loadRecords]);
-
-  // Re-check the office network as soon as the connection changes or the tab regains focus
-  useEffect(() => {
-    const refresh = () => {
-      loadToday();
-      loadRecords();
-    };
-    window.addEventListener("online", refresh);
-    window.addEventListener("focus", refresh);
+    const t = setInterval(reload, REFRESH_MS);
+    window.addEventListener("online", reload);
+    window.addEventListener("focus", reload);
     return () => {
-      window.removeEventListener("online", refresh);
-      window.removeEventListener("focus", refresh);
+      clearInterval(t);
+      window.removeEventListener("online", reload);
+      window.removeEventListener("focus", reload);
     };
-  }, [loadToday, loadRecords]);
+  }, [reload]);
+
+  const usesPasskey = !!(today?.requirePasskey || today?.hasPasskey);
+  // Have the clock-in challenge ready before the person taps the button
+  usePrepare(prepareAssertion, usesPasskey);
 
   const rec = today?.record;
   const clockedIn = !!rec?.in && !rec?.out;
@@ -1003,6 +1061,7 @@ function MyAttendance() {
   const todayDay = data?.days.find((d) => d.date === todayKey());
   const workedToday = rec?.in ? (rec.out ? rec.hours : (now - new Date(rec.in)) / 36e5) : 0;
   const shownDays = useMemo(() => filterDays(data?.days || [], cardKey), [data, cardKey]);
+  const { from: rangeFrom, to: rangeTo } = rangeDays(range);
 
   // How much of the working day is done (only when the working hours are set)
   const expected = today?.config ? (toMinutes(today.config.workEnd) - toMinutes(today.config.workStart)) / 60 : NaN;
@@ -1013,18 +1072,20 @@ function MyAttendance() {
     setMsg(null);
     try {
       const extra = {};
-      if (today.requirePasskey || today.hasPasskey) extra.assertion = await getAssertion();
-      if (scan && Date.now() - scan.at < QR_KEEP_MS) extra.qrToken = scan.t;
+      if (usesPasskey) extra.assertion = await getAssertion();
+      if (scanOk) extra.qrToken = scan.t;
       const r = await clock(action, onPhone ? "phone" : "laptop", extra);
       setMsg({
         ok: true,
         text: action === "in" ? `Clocked in at ${timeOf(r.in)}.` : `Clocked out at ${timeOf(r.out)}.`,
       });
-      await Promise.all([loadToday(), loadRecords()]);
+      await reload();
     } catch (e) {
       setMsg({ ok: false, text: e.message });
     } finally {
       setBusy(false);
+      // Each prepared challenge is used once. Get the next one now so a quick clock out is still instant.
+      if (usesPasskey) prepareAssertion();
     }
   }
 
@@ -1074,7 +1135,7 @@ function MyAttendance() {
                       Not clocked in
                     </span>
                   )}
-                  {rec?.late && <Chip text="Late" cls="bg-[#FFF4E5] text-[#8A4B00]" />}
+                  {rec?.late && <Chip text="Late" cls={LATE_CLS} />}
                 </p>
                 <p className="mt-3 max-w-sm text-xs leading-relaxed text-white/60">
                   You can also press your finger on the office scanner when it is working. Both count toward your attendance.
@@ -1165,7 +1226,7 @@ function MyAttendance() {
       <SummaryCards summary={data?.summary} active={cardKey} onSelect={setCardKey} />
 
       {/* HISTORY */}
-      <section id="attendance-print" className="mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+      <section id="attendance-print" className={`mb-6 ${SURFACE}`}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
           <div>
             <h3 className="text-base font-semibold">My history</h3>
@@ -1183,31 +1244,20 @@ function MyAttendance() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <RangeSelect value={range} onChange={setRange} />
-            <button
-              className={BTN}
-              onClick={() => exportDays(shownDays, "my-attendance")}
-              disabled={!shownDays.length}
-            >
-              <Download size={16} /> Download CSV
-            </button>
-            <button className={BTN} onClick={() => window.print()} disabled={!shownDays.length}>
-              <Printer size={16} /> Print
-            </button>
+            <PeriodSelect value={range} onChange={setRange} />
+            <ExportButtons onCsv={() => exportDays(shownDays, "my-attendance")} disabled={!shownDays.length} />
           </div>
         </div>
-        <PrintHeader
-          title="My attendance"
-          subtitle={name}
-          period={`${fullDate(rangeDays(range).from)} to ${fullDate(rangeDays(range).to)}`}
-        />
+        <PrintHeader title="My attendance" subtitle={name} period={dateRange(rangeFrom, rangeTo)} />
         {data ? <HistoryTable days={shownDays} /> : <Loading />}
       </section>
     </>
   );
 }
 
-/* ---------- team (administrator) ---------- */
+/* =====================================================================
+   Team (administrator)
+   ===================================================================== */
 
 // Add or correct one person's record for one day
 function CorrectForm({ date, initial, onDone, onCancel }) {
@@ -1310,18 +1360,14 @@ function PersonHistory({ person, onClose }) {
       description="Attendance history"
       actions={
         <>
-          <RangeSelect value={range} onChange={setRange} />
+          <PeriodSelect value={range} onChange={setRange} />
           <button className={BTN} onClick={onClose}>
             Close
           </button>
         </>
       }
     >
-      {error && (
-        <div className="p-5 pb-0">
-          <Banner msg={{ ok: false, text: error }} />
-        </div>
-      )}
+      <ErrorBanner error={error} flush />
       {data && (
         <>
           <div className="px-5 pt-5">
@@ -1335,7 +1381,7 @@ function PersonHistory({ person, onClose }) {
   );
 }
 
-// Administrator: the phones someone has registered. Remove them when a phone is lost or the person leaves.
+// The phones someone has registered. Remove them when a phone is lost or the person leaves.
 function PersonPhones({ person, onClose }) {
   const [items, setItems] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -1402,7 +1448,7 @@ function TeamAttendance() {
   const [q, setQ] = useState("");
   const [stat, setStat] = useState(null); // clicked tile: "present" | "late" | "stillIn"
   const [records, setRecords] = useState([]);
-  const [off, setOff] = useState([]); // people on approved leave, a trip or remote work that day, with no clock record
+  const [off, setOff] = useState([]); // on approved leave, a trip or remote work that day, with no clock record
   const [absent, setAbsent] = useState([]); // usual staff with no clock record and nothing approved that day
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1429,62 +1475,42 @@ function TeamAttendance() {
     };
   }, [date, tick]);
 
+  const needle = q.trim().toLowerCase();
+
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    let list = needle ? records.filter((r) => `${r.userName} ${r.userId}`.toLowerCase().includes(needle)) : records;
+    let list = records.filter((r) => matches(needle, r.userName, r.userId));
     if (stat === "late") list = list.filter((r) => r.late);
     if (stat === "stillIn") list = list.filter((r) => r.in && !r.out);
     return list;
-  }, [records, q, stat]);
+  }, [records, needle, stat]);
 
   const stillIn = records.filter((r) => r.in && !r.out).length;
   const late = records.filter((r) => r.late).length;
   const isToday = date === todayKey();
   const toggleStat = (k) => setStat((s) => (s === k ? null : k));
-  const statLabel = { present: "Present", late: "Late", stillIn: isToday ? "In the office now" : "No clock-out" };
+  const stillInLabel = isToday ? "In the office now" : "No clock-out";
+  const statLabel = { present: "Present", late: "Late", stillIn: stillInLabel };
 
   // Everyone who is not in the clock table: leave, away on duty, remote, absent (filtered by the search box too).
   // Hidden while a tile filter is on, because those people have no clock record.
-  const others = useMemo(() => {
-    if (stat) return [];
-    const needle = q.trim().toLowerCase();
-    const all = [...off, ...absent];
-    return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
-  }, [off, absent, q, stat]);
+  const others = useMemo(
+    () => (stat ? [] : [...off, ...absent].filter((p) => matches(needle, p.userName, p.userId))),
+    [off, absent, needle, stat]
+  );
   const count = (state) => others.filter((p) => p.state === state).length;
   const hasAnything = filtered.length > 0 || others.length > 0;
 
   return (
     <>
-      {error && <Banner msg={{ ok: false, text: error }} />}
+      <ErrorBanner error={error} />
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile
-          label="Present"
-          value={records.length}
-          dot="bg-[#0F9F77]"
-          active={stat === "present"}
-          onClick={() => toggleStat("present")}
-        />
-        <StatTile
-          label="Late"
-          value={late}
-          cls="text-[#8A4B00]"
-          dot="bg-[#F79009]"
-          active={stat === "late"}
-          onClick={() => toggleStat("late")}
-        />
-        <StatTile
-          label={isToday ? "In the office now" : "No clock-out"}
-          value={stillIn}
-          cls="text-[#00664E]"
-          dot="bg-[#4F7CD8]"
-          active={stat === "stillIn"}
-          onClick={() => toggleStat("stillIn")}
-        />
+        <StatTile label="Present" value={records.length} dot="bg-[#0F9F77]" active={stat === "present"} onClick={() => toggleStat("present")} />
+        <StatTile label="Late" value={late} cls="text-[#8A4B00]" dot="bg-[#F79009]" active={stat === "late"} onClick={() => toggleStat("late")} />
+        <StatTile label={stillInLabel} value={stillIn} cls="text-[#00664E]" dot="bg-[#4F7CD8]" active={stat === "stillIn"} onClick={() => toggleStat("stillIn")} />
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#E3E8E5] bg-white p-3 shadow-[0_1px_2px_rgba(11,43,36,0.04)] print:hidden">
+      <div className={TOOLBAR}>
         <div className="inline-flex items-center gap-1">
           <button className={BTN} onClick={() => setDate(addDays(date, -1))} aria-label="Previous day">
             Previous
@@ -1501,17 +1527,7 @@ function TeamAttendance() {
             Next
           </button>
         </div>
-        <div className="relative">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
-          <input
-            type="search"
-            className={`${INPUT} w-56 pl-9`}
-            placeholder="Search by name"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            aria-label="Search by name"
-          />
-        </div>
+        <SearchBox value={q} onChange={setQ} />
         {stat && (
           <span className="inline-flex items-center gap-2 text-sm text-[#475467]">
             Showing: <strong>{statLabel[stat]}</strong>
@@ -1524,12 +1540,7 @@ function TeamAttendance() {
         <button className={BTN} onClick={() => setEditing({})}>
           <Plus size={16} /> Add record
         </button>
-        <button className={BTN} onClick={() => exportDay(date, filtered, others)} disabled={!hasAnything}>
-          <Download size={16} /> Download CSV
-        </button>
-        <button className={BTN} onClick={() => window.print()} disabled={!hasAnything}>
-          <Printer size={16} /> Print
-        </button>
+        <ExportButtons onCsv={() => exportDay(date, filtered, others)} disabled={!hasAnything} />
       </div>
 
       {editing && (
@@ -1547,10 +1558,10 @@ function TeamAttendance() {
       {history && <PersonHistory person={history} onClose={() => setHistory(null)} />}
       {phones && <PersonPhones person={phones} onClose={() => setPhones(null)} />}
 
-      <div id="attendance-print" className="mb-6 overflow-hidden rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
-        <PrintHeader title="Team attendance" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={fullDate(date)} />
+      <div id="attendance-print" className={`mb-6 overflow-hidden ${SURFACE}`}>
+        <PrintHeader title="Team attendance" subtitle={needle ? `Filter: ${q.trim()}` : "All staff"} period={fullDate(date)} />
         {!loading && hasAnything && (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+          <div className={SUMMARY_BAR}>
             <span className="font-semibold text-[#0B2B24]">{fullDate(date)}</span>
             <span>Present {filtered.length}</span>
             <span>Late {late}</span>
@@ -1597,17 +1608,7 @@ function TeamAttendance() {
                         </td>
                         <td className={`${TD} tabular-nums`}>{r.in ? timeOf(r.in) : "-"}</td>
                         <td className={`${TD} tabular-nums`}>
-                          {r.out ? (
-                            timeOf(r.out)
-                          ) : r.in ? (
-                            isToday ? (
-                              <span className="text-[#00664E]">In progress</span>
-                            ) : (
-                              <span className="text-[#B54708]">No clock-out</span>
-                            )
-                          ) : (
-                            "-"
-                          )}
+                          <ClockOutCell out={r.out} hasIn={!!r.in} isToday={isToday} />
                         </td>
                         <td className={`${TD} font-medium tabular-nums`}>{hoursText(r.hours)}</td>
                         <td className={`${TD} text-[#667085]`}>
@@ -1648,10 +1649,7 @@ function TeamAttendance() {
                     {others.map((p) => (
                       <tr key={`${p.userId}|${p.state}`} className={ROW}>
                         <td className={TD}>
-                          <span className="flex items-center gap-3">
-                            <Avatar name={p.userName || p.userId} />
-                            <span className="font-medium">{p.userName || p.userId}</span>
-                          </span>
+                          <PersonCell name={p.userName || p.userId} />
                         </td>
                         <td className={TD}>
                           <Chip text={STATE_TAG[p.state]?.text || p.state} cls={STATE_TAG[p.state]?.cls || STATE_TAG.away.cls} />
@@ -1676,8 +1674,11 @@ function TeamAttendance() {
   );
 }
 
-/* ---------- team report (administrator): one line per person for a month or a year ---------- */
+/* =====================================================================
+   Team report (administrator): one line per person for a month or a year
+   ===================================================================== */
 
+const ZERO_TOTALS = { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 };
 const sumPeople = (list) =>
   list.reduce(
     (t, p) => ({
@@ -1689,7 +1690,7 @@ const sumPeople = (list) =>
       remote: t.remote + p.remote,
       hours: t.hours + p.hours,
     }),
-    { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 }
+    ZERO_TOTALS
   );
 
 function TeamReport() {
@@ -1712,11 +1713,8 @@ function TeamReport() {
     };
   }, [from, to]);
 
-  const people = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const all = data?.people || [];
-    return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
-  }, [data, q]);
+  const needle = q.trim().toLowerCase();
+  const people = useMemo(() => (data?.people || []).filter((p) => matches(needle, p.userName, p.userId)), [data, needle]);
 
   // With a card selected: only people who have that measure, highest first
   const shown = useMemo(() => {
@@ -1726,8 +1724,7 @@ function TeamReport() {
 
   const totals = useMemo(() => sumPeople(people), [people]); // the cards and the donut always cover everyone
   const shownTotals = useMemo(() => sumPeople(shown), [shown]); // the table's total row follows the filter
-
-  const periodText = data ? `${fullDate(data.from)} to ${fullDate(data.to)}` : "";
+  const periodText = data ? dateRange(data.from, data.to) : "";
 
   function onCsv() {
     downloadCsv(
@@ -1750,52 +1747,36 @@ function TeamReport() {
     );
   }
 
-  const num = `${TD} text-right tabular-nums`;
-  const numHead = `${TH} text-right`;
-
   return (
     <>
-      {error && <Banner msg={{ ok: false, text: error }} />}
+      <ErrorBanner error={error} />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#E3E8E5] bg-white p-3 shadow-[0_1px_2px_rgba(11,43,36,0.04)] print:hidden">
+      <div className={TOOLBAR}>
         <PeriodSelect
           value={period}
+          options={PERIOD_OPTIONS}
+          label="Period"
           onChange={(v) => {
             setPeriod(v);
             setMetric(null);
           }}
         />
-        <div className="relative">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
-          <input
-            type="search"
-            className={`${INPUT} w-56 pl-9`}
-            placeholder="Search by name"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            aria-label="Search by name"
-          />
-        </div>
+        <SearchBox value={q} onChange={setQ} />
         <span className="flex-1" />
-        <button className={BTN} onClick={onCsv} disabled={!shown.length}>
-          <Download size={16} /> Download CSV
-        </button>
-        <button className={BTN} onClick={() => window.print()} disabled={!shown.length}>
-          <Printer size={16} /> Print
-        </button>
+        <ExportButtons onCsv={onCsv} disabled={!shown.length} />
       </div>
 
       {data && people.length > 0 && <SummaryCards summary={totals} active={metric} onSelect={setMetric} />}
 
-      <div id="attendance-print" className="mb-6 overflow-hidden rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
-        <PrintHeader title="Attendance report" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={periodText} />
+      <div id="attendance-print" className={`mb-6 overflow-hidden ${SURFACE}`}>
+        <PrintHeader title="Attendance report" subtitle={needle ? `Filter: ${q.trim()}` : "All staff"} period={periodText} />
         {!data && !error ? (
           <Loading />
         ) : !data ? null : people.length === 0 ? (
           <Empty icon={Users} title="No attendance in this period" hint="Pick another month or year." />
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+            <div className={SUMMARY_BAR}>
               <span className="font-semibold text-[#0B2B24]">{periodText}</span>
               <span>Working days {data.workingDays}</span>
               <span>{plural(shown.length, "person")}</span>
@@ -1819,42 +1800,39 @@ function TeamReport() {
                   <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
                     <tr>
                       <th className={TH}>Name</th>
-                      <th className={numHead}>Present</th>
-                      <th className={numHead}>Late</th>
-                      <th className={numHead}>Absent</th>
-                      <th className={numHead}>On leave</th>
-                      <th className={numHead}>Away on duty</th>
-                      <th className={numHead}>Remote</th>
-                      <th className={numHead}>Hours worked</th>
+                      <th className={NUM_HEAD}>Present</th>
+                      <th className={NUM_HEAD}>Late</th>
+                      <th className={NUM_HEAD}>Absent</th>
+                      <th className={NUM_HEAD}>On leave</th>
+                      <th className={NUM_HEAD}>Away on duty</th>
+                      <th className={NUM_HEAD}>Remote</th>
+                      <th className={NUM_HEAD}>Hours worked</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shown.map((p) => (
                       <tr key={p.userId} className={ROW}>
                         <td className={TD}>
-                          <span className="flex items-center gap-3">
-                            <Avatar name={p.userName || p.userId} />
-                            <span className="font-medium">{p.userName || p.userId}</span>
-                          </span>
+                          <PersonCell name={p.userName || p.userId} />
                         </td>
-                        <td className={num}>{p.present}</td>
-                        <td className={num}>{p.late}</td>
-                        <td className={num}>{p.absent}</td>
-                        <td className={num}>{p.leave}</td>
-                        <td className={num}>{p.away}</td>
-                        <td className={num}>{p.remote}</td>
-                        <td className={`${num} font-medium`}>{hoursText(p.hours)}</td>
+                        <td className={NUM}>{p.present}</td>
+                        <td className={NUM}>{p.late}</td>
+                        <td className={NUM}>{p.absent}</td>
+                        <td className={NUM}>{p.leave}</td>
+                        <td className={NUM}>{p.away}</td>
+                        <td className={NUM}>{p.remote}</td>
+                        <td className={`${NUM} font-medium`}>{hoursText(p.hours)}</td>
                       </tr>
                     ))}
                     <tr className="border-t-2 border-[#E3E8E5] bg-[#F9FAFA] font-semibold">
                       <td className={TD}>Total</td>
-                      <td className={num}>{shownTotals.present}</td>
-                      <td className={num}>{shownTotals.late}</td>
-                      <td className={num}>{shownTotals.absent}</td>
-                      <td className={num}>{shownTotals.leave}</td>
-                      <td className={num}>{shownTotals.away}</td>
-                      <td className={num}>{shownTotals.remote}</td>
-                      <td className={num}>{hoursText(shownTotals.hours)}</td>
+                      <td className={NUM}>{shownTotals.present}</td>
+                      <td className={NUM}>{shownTotals.late}</td>
+                      <td className={NUM}>{shownTotals.absent}</td>
+                      <td className={NUM}>{shownTotals.leave}</td>
+                      <td className={NUM}>{shownTotals.away}</td>
+                      <td className={NUM}>{shownTotals.remote}</td>
+                      <td className={NUM}>{hoursText(shownTotals.hours)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1872,7 +1850,9 @@ function TeamReport() {
   );
 }
 
-/* ---------- settings (administrator): working hours and public holidays ---------- */
+/* =====================================================================
+   Settings (administrator): clocking rules, working hours, public holidays
+   ===================================================================== */
 
 function ClockingSettings() {
   const [form, setForm] = useState(null);
@@ -2120,7 +2100,9 @@ function SettingsPanel() {
   );
 }
 
-/* ---------- scanner import (administrator): manual fallback ---------- */
+/* =====================================================================
+   Scanner import (administrator): manual fallback
+   ===================================================================== */
 
 const DELIMS = [",", "\t", ";"];
 
@@ -2300,23 +2282,11 @@ function ImportFile() {
   );
 }
 
-/* ---------- leave: requests, approvals, who is away ---------- */
+/* =====================================================================
+   Leave: requests, approvals, who is away
+   ===================================================================== */
 
 const LEAVE_TYPES = ["Annual", "Sick", "Maternity", "Paternity", "Compassionate", "Study", "Unpaid", "Other"];
-
-// Working days in a range: weekends and public holidays don't count against the person's leave
-function workingDays(from, to) {
-  if (!from || !to) return 0;
-  let n = 0;
-  for (let k = from; k <= to; k = addDays(k, 1)) {
-    const o = dayOff(k);
-    if (!o.weekend && !o.holiday) n += 1;
-  }
-  return n;
-}
-
-const dateRange = (from, to) => (from === to ? fullDate(from) : `${fullDate(from)} to ${fullDate(to)}`);
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const LEAVE_STATUS_TAG = {
   pending: { text: "Waiting for approval", cls: "bg-[#FFF4E5] text-[#8A4B00]" },
@@ -2330,6 +2300,7 @@ function LeaveRequestForm({ onSent }) {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // Picking a start date also moves the end date if it would be before it
   const set = (k) => (e) => {
     const v = e.target.value;
     setForm((f) => ({ ...f, [k]: v, ...(k === "from" && (!f.to || f.to < v) ? { to: v } : {}) }));
@@ -2558,10 +2529,7 @@ function LeaveApprovals({ tick, onChange }) {
               {rows.map((r) => (
                 <tr key={r.id} className={ROW}>
                   <td className={TD}>
-                    <span className="flex items-center gap-3">
-                      <Avatar name={r.name} />
-                      <span className="font-medium">{r.name}</span>
-                    </span>
+                    <PersonCell name={r.name} />
                   </td>
                   <td className={TD}>{r.type}</td>
                   <td className={`${TD} whitespace-nowrap`}>{dateRange(r.from, r.to)}</td>
@@ -2639,17 +2607,11 @@ function WhoIsOnLeave({ tick }) {
         </select>
       }
     >
-      {error && (
-        <div className="p-5 pb-0">
-          <Banner msg={{ ok: false, text: error }} />
-        </div>
-      )}
+      <ErrorBanner error={error} flush />
       {!items && !error ? (
         <Loading />
       ) : rows.length === 0 ? (
-        <Empty
-          title={view === "past" ? "Nobody was on leave in the past 90 days" : "Nobody is on leave in this period"}
-        />
+        <Empty title={view === "past" ? "Nobody was on leave in the past 90 days" : "Nobody is on leave in this period"} />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-sm">
@@ -2666,10 +2628,7 @@ function WhoIsOnLeave({ tick }) {
               {rows.map((l, i) => (
                 <tr key={`${l.userId}|${l.from}|${i}`} className={ROW}>
                   <td className={TD}>
-                    <span className="flex items-center gap-3">
-                      <Avatar name={l.name} />
-                      <span className="font-medium">{l.name}</span>
-                    </span>
+                    <PersonCell name={l.name} />
                   </td>
                   {showType && <td className={TD}>{l.type || "-"}</td>}
                   <td className={`${TD} whitespace-nowrap`}>{dateRange(l.from, l.to)}</td>
@@ -2727,7 +2686,7 @@ function LeaveReport({ tick }) {
   }, [rows]);
   const totalDays = rows.reduce((s, r) => s + r.inPeriod, 0);
   const showType = rows.some((l) => l.type);
-  const periodText = `${fullDate(from)} to ${fullDate(to)}`;
+  const periodText = dateRange(from, to);
 
   function onCsv() {
     downloadCsv(
@@ -2738,35 +2697,26 @@ function LeaveReport({ tick }) {
   }
 
   return (
-    <section id="attendance-print" className="mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
+    <section id="attendance-print" className={`mb-6 ${SURFACE}`}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
         <div>
           <h3 className="text-base font-semibold">Leave report</h3>
           <p className="mt-0.5 text-sm text-[#667085]">Approved leave in a month or a year. Weekends and public holidays are not counted.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <PeriodSelect value={period} onChange={setPeriod} future />
-          <button className={BTN} onClick={onCsv} disabled={!rows.length}>
-            <Download size={16} /> Download CSV
-          </button>
-          <button className={BTN} onClick={() => window.print()} disabled={!rows.length}>
-            <Printer size={16} /> Print
-          </button>
+          <PeriodSelect value={period} onChange={setPeriod} options={PERIOD_OPTIONS} label="Period" future />
+          <ExportButtons onCsv={onCsv} disabled={!rows.length} />
         </div>
       </div>
       <PrintHeader title="Leave report" subtitle="Approved leave" period={periodText} />
-      {error && (
-        <div className="p-5 pb-0">
-          <Banner msg={{ ok: false, text: error }} />
-        </div>
-      )}
+      <ErrorBanner error={error} flush />
       {!items && !error ? (
         <Loading />
       ) : items && rows.length === 0 ? (
         <Empty title="No leave in this period" hint="Pick another month or year." />
       ) : items ? (
         <>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
+          <div className={SUMMARY_BAR}>
             <span className="font-semibold text-[#0B2B24]">{periodText}</span>
             <span>{plural(perPerson.length, "person")}</span>
             <span>{plural(totalDays, "leave day")}</span>
@@ -2778,16 +2728,16 @@ function LeaveReport({ tick }) {
               <thead className="border-b border-[#E3E8E5]">
                 <tr>
                   <th className={TH}>Name</th>
-                  <th className={`${TH} text-right`}>Periods of leave</th>
-                  <th className={`${TH} text-right`}>Working days</th>
+                  <th className={NUM_HEAD}>Periods of leave</th>
+                  <th className={NUM_HEAD}>Working days</th>
                 </tr>
               </thead>
               <tbody>
                 {perPerson.map((p) => (
                   <tr key={p.userId} className={ROW}>
                     <td className={`${TD} font-medium`}>{p.name}</td>
-                    <td className={`${TD} text-right tabular-nums`}>{p.spells}</td>
-                    <td className={`${TD} text-right font-medium tabular-nums`}>{p.days}</td>
+                    <td className={NUM}>{p.spells}</td>
+                    <td className={`${NUM} font-medium`}>{p.days}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2802,7 +2752,7 @@ function LeaveReport({ tick }) {
                   <th className={TH}>Name</th>
                   {showType && <th className={TH}>Type</th>}
                   <th className={TH}>Dates</th>
-                  <th className={`${TH} text-right`}>Days in period</th>
+                  <th className={NUM_HEAD}>Days in period</th>
                 </tr>
               </thead>
               <tbody>
@@ -2811,7 +2761,7 @@ function LeaveReport({ tick }) {
                     <td className={`${TD} font-medium`}>{l.name}</td>
                     {showType && <td className={TD}>{l.type || "-"}</td>}
                     <td className={`${TD} whitespace-nowrap`}>{dateRange(l.from, l.to)}</td>
-                    <td className={`${TD} text-right tabular-nums`}>{l.inPeriod}</td>
+                    <td className={NUM}>{l.inPeriod}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2839,7 +2789,9 @@ function LeavePanel({ canApprove }) {
   );
 }
 
-/* ---------- page ---------- */
+/* =====================================================================
+   Page
+   ===================================================================== */
 
 export default function Attendance() {
   const [tab, setTab] = useState("mine");
@@ -2855,25 +2807,23 @@ export default function Attendance() {
     };
   }, []);
 
+  const isAdmin = !!access.isAdmin;
   // Administrators and the CEO approve leave. If getAccess() returns canApproveLeave, that wins.
-  const canApprove = access.canApproveLeave ?? !!access.isAdmin;
+  const canApprove = access.canApproveLeave ?? isAdmin;
 
-  const tabBtn = (key, label, Icon) => (
-    <button
-      key={key}
-      role="tab"
-      aria-selected={tab === key}
-      onClick={() => setTab(key)}
-      className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors motion-reduce:transition-none ${FOCUS} ${
-        tab === key
-          ? "border-[#008060] font-semibold text-[#00664E]"
-          : "border-transparent font-medium text-[#667085] hover:border-[#C9D1CD] hover:text-[#0B2B24]"
-      }`}
-    >
-      <Icon size={16} />
-      {label}
-    </button>
-  );
+  // Every tab: [key, label, icon, adminOnly, screen]
+  const tabs = [
+    ["mine", "My attendance", Clock, false, <MyAttendance key="mine" />],
+    ["leave", "Leave", CalendarDays, false, <LeavePanel key="leave" canApprove={canApprove} />],
+    ["team", "Team", Users, true, <TeamAttendance key="team" />],
+    ["reports", "Reports", FileText, true, <TeamReport key="reports" />],
+    ["settings", "Settings", Settings, true, <SettingsPanel key="settings" />],
+    ["qr", "QR poster", QrCode, true, <QrScreen key="qr" />],
+    ["scanner", "Scanner import", Upload, true, <ImportFile key="scanner" />],
+  ].filter((t) => isAdmin || !t[3]);
+
+  // A tab the person can no longer see (for example after access changes) falls back to the first one
+  const current = tabs.find((t) => t[0] === tab) || tabs[0];
 
   return (
     <div className="min-h-full bg-[#F6F8F7] p-4 text-[#0B2B24] lg:p-8">
@@ -2890,30 +2840,25 @@ export default function Attendance() {
         </div>
 
         <div className="mb-6 flex overflow-x-auto border-b border-[#DDE3E0]" role="tablist">
-          {tabBtn("mine", "My attendance", Clock)}
-          {tabBtn("leave", "Leave", CalendarDays)}
-          {access.isAdmin && tabBtn("team", "Team", Users)}
-          {access.isAdmin && tabBtn("reports", "Reports", FileText)}
-          {access.isAdmin && tabBtn("settings", "Settings", Settings)}
-          {access.isAdmin && tabBtn("qr", "QR poster", QrCode)}
-          {access.isAdmin && tabBtn("scanner", "Scanner import", Upload)}
+          {tabs.map(([key, label, Icon]) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={current[0] === key}
+              onClick={() => setTab(key)}
+              className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors motion-reduce:transition-none ${FOCUS} ${
+                current[0] === key
+                  ? "border-[#008060] font-semibold text-[#00664E]"
+                  : "border-transparent font-medium text-[#667085] hover:border-[#C9D1CD] hover:text-[#0B2B24]"
+              }`}
+            >
+              <Icon size={16} />
+              {label}
+            </button>
+          ))}
         </div>
 
-        {tab === "leave" ? (
-          <LeavePanel canApprove={canApprove} />
-        ) : access.isAdmin && tab === "team" ? (
-          <TeamAttendance />
-        ) : access.isAdmin && tab === "reports" ? (
-          <TeamReport />
-        ) : access.isAdmin && tab === "settings" ? (
-          <SettingsPanel />
-        ) : access.isAdmin && tab === "qr" ? (
-          <QrScreen />
-        ) : access.isAdmin && tab === "scanner" ? (
-          <ImportFile />
-        ) : (
-          <MyAttendance />
-        )}
+        {current[4]}
       </div>
     </div>
   );

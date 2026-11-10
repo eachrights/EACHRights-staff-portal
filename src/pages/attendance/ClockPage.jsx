@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Fingerprint, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import { getPublicInfo, publicClock } from "./attendanceApi";
-import { passkeysSupported, getPublicAssertion } from "./passkeyClient";
+import { passkeysSupported, getPublicAssertion, preparePublicAssertion } from "./passkeyClient";
 
 // Public page opened by the office QR code (route /clock). No sign-in: the phone's fingerprint, face or PIN
 // identifies the person. It only works on the office network and on a phone that was registered earlier.
 
 const TZ = "Africa/Nairobi";
+const REFRESH_MS = 60000;
 const timeOf = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
 
@@ -39,6 +40,11 @@ export default function ClockPage() {
     }
   });
 
+  const supported = passkeysSupported();
+  const blocked = info && !info.canClock;
+  const needQr = info?.requireQr && !token;
+  const ready = supported && !!info && !blocked && !needQr;
+
   useEffect(() => {
     let on = true;
     getPublicInfo()
@@ -48,6 +54,15 @@ export default function ClockPage() {
       on = false;
     };
   }, []);
+
+  // Fetch the challenge before the tap (Safari only opens the Face ID / Touch ID prompt shortly after a tap),
+  // then refresh it every minute while the page stays open
+  useEffect(() => {
+    if (!ready) return undefined;
+    preparePublicAssertion();
+    const t = setInterval(preparePublicAssertion, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [ready]);
 
   async function onClock() {
     setBusy(true);
@@ -61,12 +76,10 @@ export default function ClockPage() {
       setError(e.message);
     } finally {
       setBusy(false);
+      // The prepared challenge is used up, even when the server then refused the clock
+      preparePublicAssertion();
     }
   }
-
-  const supported = passkeysSupported();
-  const blocked = info && !info.canClock;
-  const needQr = info?.requireQr && !token;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#EEF7F3] px-4 py-8 text-[#0B2B24]">
@@ -126,7 +139,7 @@ export default function ClockPage() {
 
             <button
               onClick={onClock}
-              disabled={busy || !supported || !info || blocked || needQr}
+              disabled={busy || !ready}
               className={`mx-auto mt-6 flex h-32 w-32 flex-col items-center justify-center gap-1 rounded-full bg-[#008060] text-white transition hover:bg-[#00664E] disabled:opacity-50 motion-reduce:transition-none ${FOCUS}`}
             >
               {busy ? <Loader2 size={34} className="animate-spin motion-reduce:animate-none" /> : <Fingerprint size={38} />}
