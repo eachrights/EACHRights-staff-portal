@@ -44,6 +44,7 @@ import {
   decideLeave,
 } from "./attendanceApi";
 import { passkeysSupported, registerThisDevice, getAssertion } from "./passkeyClient";
+import { SummaryCards, StatTile, ReportCharts, filterDays, METRICS } from "./attendanceStats";
 
 /* ---------- time helpers (all shown in Nairobi time) ---------- */
 
@@ -466,37 +467,12 @@ function DayNote({ day }) {
   );
 }
 
-function SummaryCards({ summary }) {
-  if (!summary) return null;
-  const items = [
-    ["Present", summary.present, "text-[#00664E]", "bg-[#0F9F77]"],
-    ["Late", summary.late, "text-[#8A4B00]", "bg-[#F79009]"],
-    ["Absent", summary.absent, "text-[#8A1C14]", "bg-[#D92D20]"],
-    ["On leave", summary.leave, "text-[#8A4B00]", "bg-[#F79009]"],
-    ["Away on duty", summary.away ?? 0, "text-[#2E5AAC]", "bg-[#4F7CD8]"],
-    ["Remote", summary.remote ?? 0, "text-[#1F5FA8]", "bg-[#3B8BDB]"],
-    ["Hours worked", Math.round(summary.hours * 10) / 10, "text-[#0B2B24]", "bg-[#98A2B3]"],
-  ];
-  return (
-    <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7 print:hidden">
-      {items.map(([label, value, cls, dotCls]) => (
-        <div key={label} className="rounded-xl border border-[#E3E8E5] bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-[#667085]">
-            <i className={`h-1.5 w-1.5 rounded-full ${dotCls}`} />
-            {label}
-          </p>
-          <p className={`mt-1.5 text-2xl font-semibold tabular-nums ${cls}`}>{value}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // One row per day, newest first. Weekends, holidays, leave and absences all show up.
 function HistoryTable({ days }) {
   const today = todayKey();
   const rows = [...days].reverse();
-  if (!rows.length) return <Empty title="No days in this period" hint="Pick a longer range to see more of your history." />;
+  if (!rows.length)
+    return <Empty title="No days to show" hint="Nothing matches here. Clear the card filter or pick a longer range to see more of your history." />;
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] border-collapse text-sm">
@@ -969,6 +945,7 @@ function MyAttendance() {
   const [today, setToday] = useState(null);
   const [data, setData] = useState(null);
   const [range, setRange] = useState("week");
+  const [cardKey, setCardKey] = useState(null); // a clicked summary card filters the history
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [scan] = useState(readScan);
@@ -1024,6 +1001,7 @@ function MyAttendance() {
   const needQr = !!today?.requireQr && !scanOk;
   const todayDay = data?.days.find((d) => d.date === todayKey());
   const workedToday = rec?.in ? (rec.out ? rec.hours : (now - new Date(rec.in)) / 36e5) : 0;
+  const shownDays = useMemo(() => filterDays(data?.days || [], cardKey), [data, cardKey]);
 
   // How much of the working day is done (only when the working hours are set)
   const expected = today?.config ? (toMinutes(today.config.workEnd) - toMinutes(today.config.workStart)) / 60 : NaN;
@@ -1183,25 +1161,36 @@ function MyAttendance() {
 
       {today && <PasskeyCard today={today} onChange={loadToday} />}
 
-      <SummaryCards summary={data?.summary} />
+      <SummaryCards summary={data?.summary} active={cardKey} onSelect={setCardKey} />
 
       {/* HISTORY */}
       <section id="attendance-print" className="mb-6 rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF1F0] px-5 py-4 print:hidden">
           <div>
             <h3 className="text-base font-semibold">My history</h3>
-            <p className="mt-0.5 text-sm text-[#667085]">Every day in the period, newest first.</p>
+            <p className="mt-0.5 text-sm text-[#667085]">
+              {cardKey ? (
+                <>
+                  Showing only: <strong>{METRICS[cardKey].label}</strong>.{" "}
+                  <button className="font-medium text-[#00664E] underline" onClick={() => setCardKey(null)}>
+                    Show every day
+                  </button>
+                </>
+              ) : (
+                "Every day in the period, newest first."
+              )}
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <RangeSelect value={range} onChange={setRange} />
             <button
               className={BTN}
-              onClick={() => exportDays(data.days, "my-attendance")}
-              disabled={!data?.days.length}
+              onClick={() => exportDays(shownDays, "my-attendance")}
+              disabled={!shownDays.length}
             >
               <Download size={16} /> Download CSV
             </button>
-            <button className={BTN} onClick={() => window.print()} disabled={!data?.days.length}>
+            <button className={BTN} onClick={() => window.print()} disabled={!shownDays.length}>
               <Printer size={16} /> Print
             </button>
           </div>
@@ -1211,7 +1200,7 @@ function MyAttendance() {
           subtitle={name}
           period={`${fullDate(rangeDays(range).from)} to ${fullDate(rangeDays(range).to)}`}
         />
-        {data ? <HistoryTable days={data.days} /> : <Loading />}
+        {data ? <HistoryTable days={shownDays} /> : <Loading />}
       </section>
     </>
   );
@@ -1292,6 +1281,7 @@ function CorrectForm({ date, initial, onDone, onCancel }) {
 // One person's days over a range
 function PersonHistory({ person, onClose }) {
   const [range, setRange] = useState("month");
+  const [cardKey, setCardKey] = useState(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -1334,9 +1324,9 @@ function PersonHistory({ person, onClose }) {
       {data && (
         <>
           <div className="px-5 pt-5">
-            <SummaryCards summary={data.summary} />
+            <SummaryCards summary={data.summary} active={cardKey} onSelect={setCardKey} />
           </div>
-          <HistoryTable days={data.days} />
+          <HistoryTable days={filterDays(data.days, cardKey)} />
         </>
       )}
       {!data && !error && <Loading />}
@@ -1406,21 +1396,10 @@ function PersonPhones({ person, onClose }) {
   );
 }
 
-function StatTile({ label, value, cls = "", dot }) {
-  return (
-    <div className={CARD}>
-      <p className="flex items-center gap-1.5 text-xs font-medium text-[#667085]">
-        {dot && <i className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
-        {label}
-      </p>
-      <p className={`mt-1.5 text-3xl font-semibold tabular-nums ${cls}`}>{value}</p>
-    </div>
-  );
-}
-
 function TeamAttendance() {
   const [date, setDate] = useState(todayKey());
   const [q, setQ] = useState("");
+  const [stat, setStat] = useState(null); // clicked tile: "present" | "late" | "stillIn"
   const [records, setRecords] = useState([]);
   const [off, setOff] = useState([]); // people on approved leave, a trip or remote work that day, with no clock record
   const [absent, setAbsent] = useState([]); // usual staff with no clock record and nothing approved that day
@@ -1451,19 +1430,26 @@ function TeamAttendance() {
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return needle ? records.filter((r) => `${r.userName} ${r.userId}`.toLowerCase().includes(needle)) : records;
-  }, [records, q]);
+    let list = needle ? records.filter((r) => `${r.userName} ${r.userId}`.toLowerCase().includes(needle)) : records;
+    if (stat === "late") list = list.filter((r) => r.late);
+    if (stat === "stillIn") list = list.filter((r) => r.in && !r.out);
+    return list;
+  }, [records, q, stat]);
 
   const stillIn = records.filter((r) => r.in && !r.out).length;
   const late = records.filter((r) => r.late).length;
   const isToday = date === todayKey();
+  const toggleStat = (k) => setStat((s) => (s === k ? null : k));
+  const statLabel = { present: "Present", late: "Late", stillIn: isToday ? "In the office now" : "No clock-out" };
 
-  // Everyone who is not in the clock table: leave, away on duty, remote, absent (filtered by the search box too)
+  // Everyone who is not in the clock table: leave, away on duty, remote, absent (filtered by the search box too).
+  // Hidden while a tile filter is on, because those people have no clock record.
   const others = useMemo(() => {
+    if (stat) return [];
     const needle = q.trim().toLowerCase();
     const all = [...off, ...absent];
     return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
-  }, [off, absent, q]);
+  }, [off, absent, q, stat]);
   const count = (state) => others.filter((p) => p.state === state).length;
   const hasAnything = filtered.length > 0 || others.length > 0;
 
@@ -1472,13 +1458,28 @@ function TeamAttendance() {
       {error && <Banner msg={{ ok: false, text: error }} />}
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile label="Present" value={records.length} dot="bg-[#0F9F77]" />
-        <StatTile label="Late" value={late} cls="text-[#8A4B00]" dot="bg-[#F79009]" />
+        <StatTile
+          label="Present"
+          value={records.length}
+          dot="bg-[#0F9F77]"
+          active={stat === "present"}
+          onClick={() => toggleStat("present")}
+        />
+        <StatTile
+          label="Late"
+          value={late}
+          cls="text-[#8A4B00]"
+          dot="bg-[#F79009]"
+          active={stat === "late"}
+          onClick={() => toggleStat("late")}
+        />
         <StatTile
           label={isToday ? "In the office now" : "No clock-out"}
           value={stillIn}
           cls="text-[#00664E]"
           dot="bg-[#4F7CD8]"
+          active={stat === "stillIn"}
+          onClick={() => toggleStat("stillIn")}
         />
       </div>
 
@@ -1510,6 +1511,14 @@ function TeamAttendance() {
             aria-label="Search by name"
           />
         </div>
+        {stat && (
+          <span className="inline-flex items-center gap-2 text-sm text-[#475467]">
+            Showing: <strong>{statLabel[stat]}</strong>
+            <button className={BTN_SM} onClick={() => setStat(null)}>
+              Clear
+            </button>
+          </span>
+        )}
         <span className="flex-1" />
         <button className={BTN} onClick={() => setEditing({})}>
           <Plus size={16} /> Add record
@@ -1555,8 +1564,8 @@ function TeamAttendance() {
         ) : !hasAnything ? (
           <Empty
             icon={Users}
-            title={`No attendance recorded on ${fullDate(date)}`}
-            hint="Pick another date, or add a record if someone forgot to clock in."
+            title={stat ? `Nobody matches "${statLabel[stat]}" on ${fullDate(date)}` : `No attendance recorded on ${fullDate(date)}`}
+            hint={stat ? "Click the tile again to show everyone." : "Pick another date, or add a record if someone forgot to clock in."}
           />
         ) : (
           <>
@@ -1668,9 +1677,24 @@ function TeamAttendance() {
 
 /* ---------- team report (administrator): one line per person for a month or a year ---------- */
 
+const sumPeople = (list) =>
+  list.reduce(
+    (t, p) => ({
+      present: t.present + p.present,
+      late: t.late + p.late,
+      absent: t.absent + p.absent,
+      leave: t.leave + p.leave,
+      away: t.away + p.away,
+      remote: t.remote + p.remote,
+      hours: t.hours + p.hours,
+    }),
+    { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 }
+  );
+
 function TeamReport() {
   const [period, setPeriod] = useState("month");
   const [q, setQ] = useState("");
+  const [metric, setMetric] = useState(null); // a clicked card: present | late | absent | leave | away | remote | hours
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const { from, to } = periodDays(period);
@@ -1693,22 +1717,14 @@ function TeamReport() {
     return needle ? all.filter((p) => `${p.userName} ${p.userId}`.toLowerCase().includes(needle)) : all;
   }, [data, q]);
 
-  const totals = useMemo(
-    () =>
-      people.reduce(
-        (t, p) => ({
-          present: t.present + p.present,
-          late: t.late + p.late,
-          absent: t.absent + p.absent,
-          leave: t.leave + p.leave,
-          away: t.away + p.away,
-          remote: t.remote + p.remote,
-          hours: t.hours + p.hours,
-        }),
-        { present: 0, late: 0, absent: 0, leave: 0, away: 0, remote: 0, hours: 0 }
-      ),
-    [people]
-  );
+  // With a card selected: only people who have that measure, highest first
+  const shown = useMemo(() => {
+    if (!metric) return people;
+    return people.filter((p) => (p[metric] || 0) > 0).sort((a, b) => (b[metric] || 0) - (a[metric] || 0));
+  }, [people, metric]);
+
+  const totals = useMemo(() => sumPeople(people), [people]); // the cards and the donut always cover everyone
+  const shownTotals = useMemo(() => sumPeople(shown), [shown]); // the table's total row follows the filter
 
   const periodText = data ? `${fullDate(data.from)} to ${fullDate(data.to)}` : "";
 
@@ -1716,8 +1732,18 @@ function TeamReport() {
     downloadCsv(
       ["Name", "User ID", "Days present", "Late", "Absent", "On leave", "Away on duty", "Remote", "Hours worked"],
       [
-        ...people.map((p) => [p.userName, p.userId, p.present, p.late, p.absent, p.leave, p.away, p.remote, p.hours]),
-        ["Total", "", totals.present, totals.late, totals.absent, totals.leave, totals.away, totals.remote, Math.round(totals.hours * 100) / 100],
+        ...shown.map((p) => [p.userName, p.userId, p.present, p.late, p.absent, p.leave, p.away, p.remote, p.hours]),
+        [
+          "Total",
+          "",
+          shownTotals.present,
+          shownTotals.late,
+          shownTotals.absent,
+          shownTotals.leave,
+          shownTotals.away,
+          shownTotals.remote,
+          Math.round(shownTotals.hours * 100) / 100,
+        ],
       ],
       `attendance-report-${data.from}-to-${data.to}`
     );
@@ -1731,7 +1757,13 @@ function TeamReport() {
       {error && <Banner msg={{ ok: false, text: error }} />}
 
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#E3E8E5] bg-white p-3 shadow-[0_1px_2px_rgba(11,43,36,0.04)] print:hidden">
-        <PeriodSelect value={period} onChange={setPeriod} />
+        <PeriodSelect
+          value={period}
+          onChange={(v) => {
+            setPeriod(v);
+            setMetric(null);
+          }}
+        />
         <div className="relative">
           <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" />
           <input
@@ -1744,13 +1776,15 @@ function TeamReport() {
           />
         </div>
         <span className="flex-1" />
-        <button className={BTN} onClick={onCsv} disabled={!people.length}>
+        <button className={BTN} onClick={onCsv} disabled={!shown.length}>
           <Download size={16} /> Download CSV
         </button>
-        <button className={BTN} onClick={() => window.print()} disabled={!people.length}>
+        <button className={BTN} onClick={() => window.print()} disabled={!shown.length}>
           <Printer size={16} /> Print
         </button>
       </div>
+
+      {data && people.length > 0 && <SummaryCards summary={totals} active={metric} onSelect={setMetric} />}
 
       <div id="attendance-print" className="mb-6 overflow-hidden rounded-xl border border-[#E3E8E5] bg-white shadow-[0_1px_2px_rgba(11,43,36,0.04)]">
         <PrintHeader title="Attendance report" subtitle={q.trim() ? `Filter: ${q.trim()}` : "All staff"} period={periodText} />
@@ -1763,53 +1797,68 @@ function TeamReport() {
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[#EEF1F0] bg-[#F9FAFA] px-5 py-3 text-sm text-[#475467]">
               <span className="font-semibold text-[#0B2B24]">{periodText}</span>
               <span>Working days {data.workingDays}</span>
-              <span>{plural(people.length, "person")}</span>
+              <span>{plural(shown.length, "person")}</span>
+              {metric && (
+                <span className="inline-flex items-center gap-2 print:hidden">
+                  Showing: <strong>{METRICS[metric].label}</strong>
+                  <button className={BTN_SM} onClick={() => setMetric(null)}>
+                    Clear
+                  </button>
+                </span>
+              )}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] border-collapse text-sm">
-                <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
-                  <tr>
-                    <th className={TH}>Name</th>
-                    <th className={numHead}>Present</th>
-                    <th className={numHead}>Late</th>
-                    <th className={numHead}>Absent</th>
-                    <th className={numHead}>On leave</th>
-                    <th className={numHead}>Away on duty</th>
-                    <th className={numHead}>Remote</th>
-                    <th className={numHead}>Hours worked</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {people.map((p) => (
-                    <tr key={p.userId} className={ROW}>
-                      <td className={TD}>
-                        <span className="flex items-center gap-3">
-                          <Avatar name={p.userName || p.userId} />
-                          <span className="font-medium">{p.userName || p.userId}</span>
-                        </span>
-                      </td>
-                      <td className={num}>{p.present}</td>
-                      <td className={num}>{p.late}</td>
-                      <td className={num}>{p.absent}</td>
-                      <td className={num}>{p.leave}</td>
-                      <td className={num}>{p.away}</td>
-                      <td className={num}>{p.remote}</td>
-                      <td className={`${num} font-medium`}>{hoursText(p.hours)}</td>
+
+            <ReportCharts people={shown} totals={totals} metric={metric} onMetric={setMetric} />
+
+            {shown.length === 0 ? (
+              <Empty icon={Users} title="Nobody matches this card" hint="Clear the filter to see everyone." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] border-collapse text-sm">
+                  <thead className="border-b border-[#E3E8E5] bg-[#F9FAFA]">
+                    <tr>
+                      <th className={TH}>Name</th>
+                      <th className={numHead}>Present</th>
+                      <th className={numHead}>Late</th>
+                      <th className={numHead}>Absent</th>
+                      <th className={numHead}>On leave</th>
+                      <th className={numHead}>Away on duty</th>
+                      <th className={numHead}>Remote</th>
+                      <th className={numHead}>Hours worked</th>
                     </tr>
-                  ))}
-                  <tr className="border-t-2 border-[#E3E8E5] bg-[#F9FAFA] font-semibold">
-                    <td className={TD}>Total</td>
-                    <td className={num}>{totals.present}</td>
-                    <td className={num}>{totals.late}</td>
-                    <td className={num}>{totals.absent}</td>
-                    <td className={num}>{totals.leave}</td>
-                    <td className={num}>{totals.away}</td>
-                    <td className={num}>{totals.remote}</td>
-                    <td className={num}>{hoursText(totals.hours)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {shown.map((p) => (
+                      <tr key={p.userId} className={ROW}>
+                        <td className={TD}>
+                          <span className="flex items-center gap-3">
+                            <Avatar name={p.userName || p.userId} />
+                            <span className="font-medium">{p.userName || p.userId}</span>
+                          </span>
+                        </td>
+                        <td className={num}>{p.present}</td>
+                        <td className={num}>{p.late}</td>
+                        <td className={num}>{p.absent}</td>
+                        <td className={num}>{p.leave}</td>
+                        <td className={num}>{p.away}</td>
+                        <td className={num}>{p.remote}</td>
+                        <td className={`${num} font-medium`}>{hoursText(p.hours)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-[#E3E8E5] bg-[#F9FAFA] font-semibold">
+                      <td className={TD}>Total</td>
+                      <td className={num}>{shownTotals.present}</td>
+                      <td className={num}>{shownTotals.late}</td>
+                      <td className={num}>{shownTotals.absent}</td>
+                      <td className={num}>{shownTotals.leave}</td>
+                      <td className={num}>{shownTotals.away}</td>
+                      <td className={num}>{shownTotals.remote}</td>
+                      <td className={num}>{hoursText(shownTotals.hours)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
             <p className="border-t border-[#EEF1F0] px-5 py-3 text-xs text-[#667085]">
               Counts are in days, working days only (weekdays that are not public holidays), up to today. Absent means a
               working day with no clock record, leave, trip or remote day. A person is counted from the first day they
