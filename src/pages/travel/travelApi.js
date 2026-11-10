@@ -2,12 +2,22 @@
 // src/pages/travel/travelApi.js
 //
 // Matches requestRoutes.mjs:
-//   GET  /me/travel                 my requests (?status=), administrator can add ?scope=all
-//   POST /me/travel                 create { tripType, destination, purpose, startDate, endDate, estimatedCost, currency }
-//   POST /me/travel/{id}/cancel     cancel
-//   POST /me/travel/{id}/approve    administrator { note? }
-//   POST /me/travel/{id}/reject     administrator { note } (required)
-//   GET  /me/travel/away?when=      approved trips (active | current | upcoming | past | all)
+//   GET  /me/travel                       my requests (?status=)
+//                                         ?scope=all      administrator / CEO: everyone's
+//                                         ?scope=finance  finance approvers: requests waiting for Finance
+//   POST /me/travel                       create { tripType, destination, purpose, startDate, endDate, estimatedCost, currency }
+//   POST /me/travel/{id}/cancel           cancel
+//   POST /me/travel/{id}/finance-approve  Finance approver { note? }   (only while stage is "finance")
+//   POST /me/travel/{id}/finance-reject   Finance approver { note }    (required)
+//   POST /me/travel/{id}/approve          administrator / CEO { note? } (final approval)
+//   POST /me/travel/{id}/reject           administrator / CEO { note }  (required)
+//   GET  /me/travel/away?when=            approved trips (active | current | upcoming | past | all)
+//
+// Approval flow
+//   A request with an estimated cost above zero is created with status "pending" and stage "finance".
+//   Finance approves it, which moves it to stage "ceo". Only then can the CEO / administrator approve it.
+//   A request with no cost starts at stage "ceo" (no Finance step).
+//   If Finance rejects, the request is closed as "rejected" and never reaches the CEO.
 
 import { getCognitoSession } from "../../components/api.js";
 
@@ -123,25 +133,45 @@ const AWAY_WHEN = ["active", "current", "upcoming", "past", "all"];
 const toApiTripType = (label) => (/field/i.test(String(label ?? "")) ? "field" : "travel");
 const toUiTripType = (tripType) => (tripType === "field" ? "Field visit" : "Official travel");
 
+// A trip needs Finance when it has an estimated cost above zero.
+export const tripNeedsFinance = (r) => Number(r?.estimatedCost ?? r?.estCost) > 0;
+
+// Where a pending request is in the approval chain: "finance", "ceo", or "" once it is decided.
+// Uses the stage the API sends. For older records without one, it is worked out from the cost.
+export const tripStage = (r) => {
+  if (!r || r.status !== "pending") return "";
+  if (r.stage === "finance" || r.stage === "ceo") return r.stage;
+  return tripNeedsFinance(r) && !r.financeReviewedBy ? "finance" : "ceo";
+};
+
 // Give API records the field names the Travel page uses.
-const toUiTrip = (r) => ({
-  ...r,
-  from: r.startDate,
-  to: r.endDate,
-  name: r.userName,
-  type: r.tripType ? toUiTripType(r.tripType) : r.type,
-  estCost: r.estimatedCost,
-  decidedBy: r.reviewedBy,
-  decisionNote: r.reviewNote,
-});
+const toUiTrip = (r) => {
+  const ui = {
+    ...r,
+    from: r.startDate,
+    to: r.endDate,
+    name: r.userName,
+    type: r.tripType ? toUiTripType(r.tripType) : r.type,
+    estCost: r.estimatedCost,
+    decidedBy: r.reviewedBy,
+    decisionNote: r.reviewNote,
+    financeBy: r.financeReviewedBy,
+    financeNote: r.financeReviewNote,
+    financeAt: r.financeReviewedAt,
+  };
+  ui.needsFinance = tripNeedsFinance(r);
+  ui.stage = tripStage(r);
+  return ui;
+};
 
 /* ---------- calls ---------- */
 
 // List trip requests.
-// scope "me" = own requests, scope "all" = everyone's (administrators only).
+// scope "me" = own requests, "all" = everyone's (administrator / CEO),
+// "finance" = requests waiting for Finance approval (finance approvers).
 export async function listTrips({ scope = "me", status } = {}) {
   const params = new URLSearchParams();
-  if (scope === "all") params.set("scope", "all");
+  if (scope === "all" || scope === "finance") params.set("scope", scope);
   if (status) params.set("status", status);
   const qs = params.toString();
 
@@ -163,7 +193,8 @@ export async function listAway({ from, to } = {}) {
 }
 
 // Submit a travel or field-trip request.
-export const requestTrip = ({ type, destination, purpose, from, to, estCost }) =>
+// A request with a cost goes to Finance first, then the CEO.
+export const requestTrip = ({ type, destination, purpose, from, to, estCost, currency }) =>
   call("/me/travel", {
     method: "POST",
     body: JSON.stringify({
@@ -173,6 +204,7 @@ export const requestTrip = ({ type, destination, purpose, from, to, estCost }) =
       startDate: from,
       endDate: to,
       estimatedCost: estCost === null || estCost === undefined ? "" : estCost,
+      ...(currency ? { currency } : {}),
     }),
   });
 
@@ -183,14 +215,25 @@ export const cancelTrip = (id) =>
     body: JSON.stringify({}),
   });
 
-// Approve or reject a trip request. decision: "approve" | "approved" | "reject" | "rejected".
-// The API requires a note when rejecting.
+// Turn "approve" | "approved" | "reject" | "rejected" into "approve" | "reject" | "".
+const actionOf = (decision) =>
+  String(decision).startsWith("approve") ? "approve" : String(decision).startsWith("reject") ? "reject" : "";
+
+// Finance step. Only for requests at stage "finance". Approving passes the request to the CEO;
+// rejecting closes it. The API requires a note when rejecting.
+export const financeDecideTrip = (id, { decision, note = "" } = {}) => {
+  const action = actionOf(decision);
+  if (!action) return Promise.reject(new Error("Choose approve or reject."));
+  return call(`/me/travel/${encodeURIComponent(id)}/finance-${action}`, {
+    method: "POST",
+    body: JSON.stringify({ note: note || (action === "reject" ? "Not approved." : "") }),
+  });
+};
+
+// Final step (CEO / administrator). The API refuses it while the request still waits for Finance.
+// decision: "approve" | "approved" | "reject" | "rejected". The API requires a note when rejecting.
 export const decideTrip = (id, { decision, note = "" } = {}) => {
-  const action = String(decision).startsWith("approve")
-    ? "approve"
-    : String(decision).startsWith("reject")
-    ? "reject"
-    : "";
+  const action = actionOf(decision);
   if (!action) return Promise.reject(new Error("Choose approve or reject."));
   return call(`/me/travel/${encodeURIComponent(id)}/${action}`, {
     method: "POST",

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { financeApi } from "./financeApi"; // same folder: src/pages/services/financeApi.js
+import TravelFinanceQueue from "./TravelFinanceQueue";
 
 /* =====================================================================
    Configuration
@@ -823,7 +824,7 @@ function Finance({ projectId: scopeProjectId = null }) {
               )}
             </div>
           </div>
-
+          {isApprover && !scopeProjectId && <TravelFinanceQueue onToast={setToast} />}
           {/* Transactions */}
           <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="border-b border-gray-200 p-6">
